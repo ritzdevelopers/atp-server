@@ -2,7 +2,8 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import db from "./db/connect.js";
-import authRoutes from "./routes/authRoutes.js";
+import authRoutes from "./routes/admin.auth.routes.js";
+import userRoutes from "./routes/admin.controlled.routes.js";
 dotenv.config();
 
 const app = express();
@@ -14,10 +15,13 @@ app.get("/", (req, res) => {
   res.send("Hello World");
 });
 
+
+// Authentication Routes
 app.use("/api/auth", authRoutes);
 
 // User CRUD Operations Routes :: It Will Be Used By Admin Only And HR
 app.use("/api/user", userRoutes);
+
 
 
 app.listen(3000, () => {
