@@ -9,8 +9,10 @@ import user_authorization from "../middlewares/user_authorization.js";
 
 const router = Router();
 
-router.post("/register", user_register_controller);
-router.post("/login", user_login_controller);
+router.post("/register", user_register_controller); // :: Tested and Working Fine ::
+router.post("/login", user_login_controller); // :: Tested and Working Fine ::
+
+
 router.get(
   "/admin/get-me",
   user_validation_middleware,

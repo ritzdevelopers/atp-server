@@ -1,5 +1,6 @@
 import { Router } from "express";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
+import { delete_users_controller, get_all_users_controller, update_user_name_email_phone_password_controller, update_user_role_controller, user_register_controller } from "../controllers/user.controller.js";
 
 const router = Router();
 
@@ -8,7 +9,7 @@ router.get("/get-all-users", user_validation_middleware, user_authorization("hr"
 
 
 // Add New User Route :: It Will Be Used By HR Only
-router.post("/add-new-user", user_validation_middleware, user_authorization("hr"), add_new_user_controller);
+router.post("/add-new-user", user_validation_middleware, user_authorization("hr"), user_register_controller);
 
 
 // Update User Role Route :: It Will Be Used By HR Only
@@ -18,6 +19,6 @@ router.patch("/update-user-role", user_validation_middleware, user_authorization
 router.patch("/update-user-name-email-phone-password", user_validation_middleware, user_authorization("hr"), update_user_name_email_phone_password_controller);
 
 // Delete User Route :: It Will Be Used By HR Only
-router.delete("/delete-user", user_validation_middleware, user_authorization("hr"), delete_user_controller);
+router.delete("/delete-user", user_validation_middleware, user_authorization("hr"), delete_users_controller);
 
 export default router;
