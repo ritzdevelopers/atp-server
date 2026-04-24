@@ -125,7 +125,6 @@ export const user_register_controller = async (req, res) => {
             const orgId = result[0].id;
 
             const role_exists = await isValidRole(user_role_id, orgId);
-           
 
             if (!role_exists || !role_exists?.success) {
               return db.rollback(() => {
@@ -293,6 +292,7 @@ export const user_register_controller = async (req, res) => {
   }
 };
 
+
 export const user_login_controller = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -303,72 +303,84 @@ export const user_login_controller = async (req, res) => {
     const check_user_exists_query =
       "SELECT * FROM apt_users WHERE user_email = ?";
 
-    db.query(check_user_exists_query, [email], async (err, result) => {
-      if (err) {
-        console.error("Error checking user exists: ", err);
-        return res.status(500).json({ message: "Error checking user exists" });
-      }
-      if (result.length === 0) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
+    let result;
+    try {
+      [result] = await db.promise().query(check_user_exists_query, [email]);
+    } catch (err) {
+      console.error("Error checking user exists: ", err);
+      return res.status(500).json({ message: "Error checking user exists" });
+    }
 
-      const user = result[0];
-      const is_password_valid = await bcrypt.compare(
-        password,
-        user.user_password,
-      );
-      if (!is_password_valid) {
-        return res.status(401).json({ message: "Invalid credentials" });
-      }
+    if (result.length === 0) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-      // Fetch User Role ID
-      const fetch_user_role_query =
-        "SELECT * FROM apt_user_roles WHERE user_id = ?";
-      db.query(fetch_user_role_query, [user.id], (err, result) => {
-        if (err) {
-          console.error("Error fetching user role: ", err);
-          return res.status(500).json({ message: "Error fetching user role" });
-        }
+    const user = result[0];
+    const is_password_valid = await bcrypt.compare(
+      password,
+      user.user_password,
+    );
+    if (!is_password_valid) {
+      return res.status(401).json({ message: "Invalid credentials" });
+    }
 
-        if (result.length === 0) {
-          return res.status(404).json({ message: "User role not found" });
-        }
+    // Fetch User Role ID
+    const fetch_user_role_query =
+      "SELECT * FROM apt_user_roles WHERE user_id = ?";
+    try {
+      [result] = await db.promise().query(fetch_user_role_query, [user.id]);
+    } catch (err) {
+      console.error("Error fetching user role: ", err);
+      return res
+        .status(500)
+        .json({ message: "Error fetching user role", user_id: user.id });
+    }
 
-        const user_role = result[0];
-        const user_role_id = user_role.role_id;
+    if (result.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "User role not found", user_id: user.id });
+    }
 
-        // Fetch User Role Name
-        const fetch_user_role_name_query = "WHERE id = ?";
-        db.query(fetch_user_role_name_query, [user_role_id], (err, result) => {
-          if (err) {
-            console.error("Error fetching user role name: ", err);
-            return res
-              .status(500)
-              .json({ message: "Error fetching user role name" });
-          }
-          if (result.length === 0) {
-            return res
-              .status(404)
-              .json({ message: "User role name not found" });
-          }
-          const user_role_name = result[0].role_name;
+    const user_role = result[0];
+    const user_role_id = user_role.role_id;
 
-          const user_for_token = {
-            user_id: user.id,
-            user_email: user.user_email,
-            user_role_id: user_role_id,
-            user_role_name: user_role_name,
-          };
-          const token = jwt.sign(user_for_token, process.env.JWT_SECRET, {
-            expiresIn: "30d",
-          });
-          return res.status(200).json({ message: "Login successful", token });
-        });
+    // Fetch User Role Name
+    const fetch_user_role_name_query = "SELECT * FROM apt_roles WHERE id = ?";
+    try {
+      [result] = await db.promise().query(fetch_user_role_name_query, [
+        user_role_id,
+      ]);
+    } catch (err) {
+      console.error("Error fetching user role name: ", err);
+      return res.status(500).json({
+        message: "Error fetching user role name",
+        user_id: user.id,
       });
+    }
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        message: "User role name not found",
+        user_id: user.id,
+      });
+    }
+
+    const user_role_name = result[0].role_name;
+
+    const user_for_token = {
+      user_id: user.id,
+      user_email: user.user_email,
+      user_role_id: user_role_id,
+      user_role_name: user_role_name,
+    };
+    const token = jwt.sign(user_for_token, process.env.JWT_SECRET, {
+      expiresIn: "30d",
     });
+    return res.status(200).json({ message: "Login successful", token });
   } catch (error) {
     console.error("Error logging in user: ", error);
-    res.status(500).json({ message: "Error logging in user" });
+    return res.status(500).json({ message: "Error logging in user" });
   }
 };
 
