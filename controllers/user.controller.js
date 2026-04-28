@@ -9,7 +9,6 @@ dotenv.config();
 
 const isValidRole = async (role_id, organization_id) => {
   try {
-
     if (!organization_id || !role_id) {
       return {
         data: null,
@@ -20,12 +19,11 @@ const isValidRole = async (role_id, organization_id) => {
     }
 
     const check_role_exists_query =
-      "SELECT * FROM apt_roles WHERE id = ? AND orgId = ?";
+      "SELECT * FROM apt_roles WHERE id = ? AND org_id = ?";
 
-    const [result] = await db.promise().query(
-      check_role_exists_query,
-      [role_id, organization_id]
-    );
+    const [result] = await db
+      .promise()
+      .query(check_role_exists_query, [role_id, organization_id]);
 
     if (result.length === 0) {
       return {
@@ -42,7 +40,6 @@ const isValidRole = async (role_id, organization_id) => {
       success: true,
       message: "Role found",
     };
-
   } catch (error) {
     console.error("Error checking role exists: ", error);
     return {
@@ -133,7 +130,6 @@ export const user_register_controller = async (req, res) => {
             }
             const role_id = role_exists?.data?.id;
 
-        
             if (role_id !== user_role_id) {
               return db.rollback(() => {
                 return res.status(400).json({ message: "Invalid role ID" });
@@ -141,7 +137,7 @@ export const user_register_controller = async (req, res) => {
             }
 
             const query =
-              "INSERT INTO apt_users (user_name, user_email, user_password, user_phone, orgId) VALUES (?, ?, ?, ?, ?)";
+              "INSERT INTO apt_users (user_name, user_email, user_password, user_phone) VALUES (?, ?, ?, ?)";
             const values = [name, email, hashedPassword, phone, orgId];
 
             db.query(query, values, (err, result) => {
@@ -157,11 +153,11 @@ export const user_register_controller = async (req, res) => {
               const user_id = result.insertId;
 
               const register_user_role_query =
-                "INSERT INTO apt_user_roles (user_id, role_id) VALUES (?, ?)";
+                "INSERT INTO apt_user_roles (user_id, role_id, org_id) VALUES (?, ?, ?)";
 
               db.query(
                 register_user_role_query,
-                [user_id, user_role_id],
+                [user_id, user_role_id, orgId],
                 (err, result) => {
                   // If Err Rollback User Registration
                   if (err) {
@@ -173,8 +169,28 @@ export const user_register_controller = async (req, res) => {
                     });
                   }
 
+                  // Register User To Organization
+                  const register_user_to_organization_query = `INSERT INTO apt_org_members (user_id, org_id) VALUES (?, ?)`;
+                  db.query(
+                    register_user_to_organization_query,
+                    [user_id, orgId],
+                    (err, result) => {
+                      if (err) {
+                        console.error(
+                          "Error registering user to organization: ",
+                          err,
+                        );
+                        return db.rollback(() => {
+                          return res.status(500).json({
+                            message: "Error registering user to organization",
+                          });
+                        });
+                      }
+                    },
+                  );
+
                   // Save This Whole Activity ::
-                  const save_activity = `INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value) VALUES (?, ?, ?, ?, ?)`;
+                  const save_activity = `INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value, action_reason, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
 
                   db.query(
                     save_activity,
@@ -188,7 +204,10 @@ export const user_register_controller = async (req, res) => {
                         email,
                         phone,
                         role_id: user_role_id,
+                        org_id: orgId,
                       }),
+                      "Created New User",
+                      orgId,
                     ],
                     (err, result) => {
                       if (err) {
@@ -222,7 +241,7 @@ export const user_register_controller = async (req, res) => {
         } else {
           // Case :: 2 -> Organization ID is not provided
           const query =
-            "INSERT INTO apt_users (user_name, user_email, user_password, user_phone, orgId) VALUES (?, ?, ?, ?, ?)";
+            "INSERT INTO apt_users (user_name, user_email, user_password, user_phone, org_id) VALUES (?, ?, ?, ?, ?)";
           const values = [name, email, hashedPassword, phone, null];
 
           db.query(query, values, (err, result) => {
@@ -292,7 +311,6 @@ export const user_register_controller = async (req, res) => {
   }
 };
 
-
 export const user_login_controller = async (req, res) => {
   try {
     const { email, password } = req.body;
@@ -348,9 +366,9 @@ export const user_login_controller = async (req, res) => {
     // Fetch User Role Name
     const fetch_user_role_name_query = "SELECT * FROM apt_roles WHERE id = ?";
     try {
-      [result] = await db.promise().query(fetch_user_role_name_query, [
-        user_role_id,
-      ]);
+      [result] = await db
+        .promise()
+        .query(fetch_user_role_name_query, [user_role_id]);
     } catch (err) {
       console.error("Error fetching user role name: ", err);
       return res.status(500).json({
@@ -396,14 +414,22 @@ export const admin_get_me_controller = async (req, res) => {
     const user_id = user.user_id;
 
     // Check Admin Organization ID Using User ID
-    const [rows] = await db.promise().query("SELECT orgId FROM apt_users WHERE id = ?", [user_id]);
+    const [rows] = await db
+      .promise()
+      .query("SELECT orgId FROM apt_users WHERE id = ?", [user_id]);
 
     if (rows.length === 0) {
-      return res.status(200).json({ message: "User Fetched But Organization Is Not Registered", user, organization_id: null });
+      return res.status(200).json({
+        message: "User Fetched But Organization Is Not Registered",
+        user,
+        organization_id: null,
+      });
     }
     const organization_id = rows[0].orgId;
 
-    return res.status(200).json({ message: "User fetched successfully", user, organization_id });
+    return res
+      .status(200)
+      .json({ message: "User fetched successfully", user, organization_id });
   } catch (error) {
     console.error("Error fetching user: ", error);
     res.status(500).json({ message: "Error fetching user" });
@@ -440,27 +466,32 @@ export const get_all_users_controller = async (req, res) => {
       const org_admin_id = result[0].owner_id;
 
       // If User Role Name Is HR Then Fetch All The Users Of The Organization Except Admin & HR
-      let query = null;
-      if (user_role_name === "hr") {
-        query = `SELECT 
-                       apt_users.*, 
-                       apt_roles.role_name as user_role_name
-                       FROM apt_users
-                       JOIN apt_user_roles ON apt_user_roles.user_id = apt_users.id 
-                       JOIN apt_roles ON apt_roles.id = apt_user_roles.role_id
-                       WHERE apt_users.orgID = ? AND apt_roles.role_name NOT IN ('admin', 'hr') `;
-      } else {
-        query = `SELECT 
-                       apt_users.*, 
-                       apt_roles.role_name as user_role_name
-                       FROM apt_users
-                       JOIN apt_user_roles ON apt_user_roles.user_id = apt_users.id 
-                       JOIN apt_roles ON apt_roles.id = apt_user_roles.role_id
-                       WHERE apt_users.orgID = ? AND apt_roles.role_name NOT IN ('admin')`;
-      }
+      let query = `
+  SELECT 
+    apt_users.id AS id,
+    apt_org_members.id AS org_member_id,
+    apt_user_roles.id AS user_role_assignment_id,
+    apt_users.user_name,
+    apt_users.user_email,
+    apt_users.user_phone,
+    apt_org_members.created_at,
+
+    apt_user_roles.role_id,
+    apt_roles.role_name
+
+  FROM apt_org_members 
+  INNER JOIN apt_users 
+    ON apt_users.id = apt_org_members.user_id
+  INNER JOIN apt_user_roles
+    ON apt_user_roles.user_id = apt_users.id AND apt_user_roles.org_id = apt_org_members.org_id
+  INNER JOIN apt_roles
+    ON apt_roles.id = apt_user_roles.role_id AND apt_roles.org_id = apt_org_members.org_id
+  WHERE apt_org_members.org_id = ?
+`;
 
       db.query(query, [organization_id], (err, result) => {
         if (err) {
+          console.error("Error fetching users: ", err);
           return res.status(500).json({ message: "Error fetching users" });
         }
 
@@ -478,271 +509,134 @@ export const get_all_users_controller = async (req, res) => {
 
 export const update_user_role_controller = async (req, res) => {
   try {
-    const { user_id, organization_id, new_role_id, previous_role_id } =
-      req.body;
-    if (!user_id || !organization_id || !new_role_id || !previous_role_id) {
+    const { user_id, organization_id, new_role_id } = req.body;
+    if (!user_id || !organization_id || !new_role_id) {
       return res.status(400).json({ message: "All fields are required" });
     }
-    const user = req.user;
+
+    const action_user = req.user;
     if (
-      !user ||
-      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
+      !action_user ||
+      (action_user.user_role_name !== "admin" &&
+        action_user.user_role_name !== "hr")
     ) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    const admin_id = user.user_id;
-    const user_role_name = user.user_role_name;
+    const action_user_id = action_user.user_id;
 
-    if (user_role_name === "hr") {
-      db.beginTransaction((err) => {
+    // Transaction Begins ::
+    db.beginTransaction((err) => {
+      if (err) {
+        console.error("Transaction error: ", err);
+        return res.status(500).json({ message: "Transaction error" });
+      }
+
+      // Check If Organization Is Valid
+      const organization_check =
+        "SELECT id, owner_id from apt_organizations where id = ?";
+      db.query(organization_check, [organization_id], (err, result) => {
         if (err) {
-          console.error("Transaction error: ", err);
-          return res.status(500).json({ message: "Transaction error" });
-        }
-
-        // Check HR belongs to this organization
-        const hr_check = "SELECT * from apt_users where id = ? and orgID = ?";
-        db.query(hr_check, [admin_id, organization_id], (err, result) => {
-          if (err) {
-            console.error("Error checking hr exists: ", err);
-            return db.rollback(() => {
-              return res
-                .status(500)
-                .json({ message: "Error checking hr exists" });
-            });
-          }
-          if (result.length === 0) {
-            return db.rollback(() => {
-              return res.status(404).json({ message: "HR not found" });
-            });
-          }
-
-          const user_check =
-            "SELECT * from apt_users where id = ? and orgID = ?";
-          db.query(user_check, [user_id, organization_id], (err, result) => {
-            if (err) {
-              console.error("Error checking user exists: ", err);
-              return db.rollback(() => {
-                return res
-                  .status(500)
-                  .json({ message: "Error checking user exists" });
-              });
-            }
-            if (result.length === 0) {
-              return db.rollback(() => {
-                return res.status(404).json({ message: "User not found" });
-              });
-            }
-
-            const targetRoleCheck =
-              "SELECT apt_roles.role_name FROM apt_user_roles JOIN apt_roles ON apt_roles.id = apt_user_roles.role_id WHERE apt_user_roles.user_id = ? and apt_user_roles.id = ?";
-            db.query(
-              targetRoleCheck,
-              [user_id, previous_role_id],
-              (err, roleResult) => {
-                if (err) {
-                  console.error("Error checking target user role: ", err);
-                  return db.rollback(() => {
-                    return res.status(500).json({
-                      message: "Error checking target user role",
-                    });
-                  });
-                }
-                if (roleResult.length === 0) {
-                  return db.rollback(() => {
-                    return res
-                      .status(404)
-                      .json({ message: "Previous role not found" });
-                  });
-                }
-
-                const targetRoleName = roleResult[0].role_name;
-                if (targetRoleName === "admin" || targetRoleName === "hr") {
-                  return db.rollback(() => {
-                    return res.status(403).json({
-                      message: "HR cannot update role of admin or HR users",
-                    });
-                  });
-                }
-
-                const role_check = "SELECT * from apt_roles where id = ?";
-                db.query(role_check, [new_role_id], (err, result) => {
-                  if (err) {
-                    console.error("Error checking role exists: ", err);
-                    return db.rollback(() => {
-                      return res
-                        .status(500)
-                        .json({ message: "Error checking role exists" });
-                    });
-                  }
-                  if (result.length === 0) {
-                    return db.rollback(() => {
-                      return res
-                        .status(404)
-                        .json({ message: "Role not found" });
-                    });
-                  }
-
-                  const newRoleName = result[0].role_name;
-                  if (newRoleName === "admin" || newRoleName === "hr") {
-                    return db.rollback(() => {
-                      return res.status(403).json({
-                        message: "HR cannot assign admin or HR role",
-                      });
-                    });
-                  }
-
-                  const update_user_role_query =
-                    "UPDATE apt_user_roles set role_id = ? where user_id = ? and id = ?";
-                  db.query(
-                    update_user_role_query,
-                    [new_role_id, user_id, previous_role_id],
-                    (err, result) => {
-                      if (err) {
-                        console.error("Error updating user role: ", err);
-                        return db.rollback(() => {
-                          return res
-                            .status(500)
-                            .json({ message: "Error updating user role" });
-                        });
-                      }
-
-                      const save_activity =
-                        "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value) VALUES (?, ?, ?, ?, ?)";
-                      db.query(
-                        save_activity,
-                        [
-                          admin_id,
-                          user_id,
-                          "UPDATE_USER_ROLE",
-                          JSON.stringify(previous_role_id),
-                          JSON.stringify(new_role_id),
-                        ],
-                        (err) => {
-                          if (err) {
-                            console.error("Error saving activity: ", err);
-                            return db.rollback(() => {
-                              return res
-                                .status(500)
-                                .json({ message: "Error saving activity" });
-                            });
-                          }
-
-                          return db.commit(() => {
-                            return res.status(200).json({
-                              message: "User role updated successfully",
-                              result: result.affectedRows,
-                            });
-                          });
-                        },
-                      );
-                    },
-                  );
-                });
-              },
-            );
+          console.error("Error checking organization exists: ", err);
+          return db.rollback(() => {
+            return res
+              .status(500)
+              .json({ message: "Error checking organization exists" });
           });
-        });
-      });
-    } else {
-      db.beginTransaction((err) => {
-        if (err) {
-          console.error("Transaction error: ", err);
-          return res.status(500).json({ message: "Transaction error" });
         }
 
-        // Check If Organization and Amin Is Valid
-        const organization_check =
-          "SELECT * from apt_organizations where id = ? and owner_id = ?";
+        if (result.length === 0) {
+          return db.rollback(() => {
+            return res.status(404).json({ message: "Organization not found" });
+          });
+        }
+        const organization_owner_id = result[0].owner_id;
+
+        // For now no one can't change or update the role of organization owner
+        if (organization_owner_id === user_id) {
+          return db.rollback(() => {
+            return res.status(403).json({
+              message:
+                "You are not authorized to update the role of organization owner",
+            });
+          });
+        }
+
+        // Check If Action User Is Valid Member Of The Organization
+        const action_user_is_member_of_organization_check =
+          "SELECT user_id from apt_org_members where user_id = ? and org_id = ?";
         db.query(
-          organization_check,
-          [organization_id, admin_id],
+          action_user_is_member_of_organization_check,
+          [action_user_id, organization_id],
           (err, result) => {
             if (err) {
-              console.error("Error checking organization exists: ", err);
+              console.error(
+                "Error checking action user is member of organization: ",
+                err,
+              );
               return db.rollback(() => {
-                return res
-                  .status(500)
-                  .json({ message: "Error checking organization exists" });
+                return res.status(500).json({
+                  message:
+                    "Error checking action user is member of organization",
+                });
               });
             }
+
             if (result.length === 0) {
               return db.rollback(() => {
-                return res
-                  .status(404)
-                  .json({ message: "Organization not found" });
+                return res.status(404).json({
+                  message: "Action user is not a member of the organization",
+                });
               });
             }
-            const organization = result[0];
-            if (!organization) {
+            if (result[0].user_id !== action_user_id) {
               return db.rollback(() => {
-                return res
-                  .status(404)
-                  .json({ message: "Organization not found" });
+                return res.status(403).json({
+                  message: "You are not authorized to update this user",
+                });
               });
             }
 
-            const user_check =
-              "SELECT * from apt_users where id = ? and orgID = ?";
-            db.query(user_check, [user_id, organization_id], (err, result) => {
-              if (err) {
-                console.error("Error checking user exists: ", err);
-                return db.rollback(() => {
-                  return res
-                    .status(500)
-                    .json({ message: "Error checking user exists" });
-                });
-              }
-              if (result.length === 0) {
-                return db.rollback(() => {
-                  return res.status(404).json({ message: "User not found" });
-                });
-              }
-              const foundUser = result[0];
-              if (!foundUser) {
-                return db.rollback(() => {
-                  return res.status(404).json({ message: "User not found" });
-                });
-              }
-
-              // Check If New Role ID Is Valid
-              const role_check = "SELECT * from apt_roles where id = ?";
-              db.query(role_check, [new_role_id], (err, result) => {
+            // Check If the user is member of the organization
+            const user_is_member_of_organization_check =
+              "SELECT user_id from apt_org_members where user_id = ? and org_id = ?";
+            db.query(
+              user_is_member_of_organization_check,
+              [user_id, organization_id],
+              (err, result) => {
                 if (err) {
-                  console.error("Error checking role exists: ", err);
+                  console.error(
+                    "Error checking user is member of organization: ",
+                    err,
+                  );
                   return db.rollback(() => {
-                    return res
-                      .status(500)
-                      .json({ message: "Error checking role exists" });
+                    return res.status(500).json({
+                      message: "Error checking user is member of organization",
+                    });
                   });
                 }
                 if (result.length === 0) {
                   return db.rollback(() => {
-                    return res.status(404).json({ message: "Role not found" });
-                  });
-                }
-                const role = result[0];
-                if (!role) {
-                  return db.rollback(() => {
-                    return res.status(404).json({ message: "Role not found" });
+                    return res.status(404).json({
+                      message: "User is not a member of the organization",
+                    });
                   });
                 }
 
-                // Check If Previous Role and User Is Valid 
-                const previous_role_check =
-                  "SELECT * from apt_user_roles where user_id = ? and role_id = ?";
+                // check if new role id is valid
+                const new_role_id_is_valid_check =
+                  "SELECT id, role_name from apt_roles where id = ? and org_id = ?";
                 db.query(
-                  previous_role_check,
-                  [user_id, previous_role_id],
+                  new_role_id_is_valid_check,
+                  [new_role_id, organization_id],
                   (err, result) => {
                     if (err) {
                       console.error(
-                        "Error checking previous role exists: ",
+                        "Error checking new role id is valid: ",
                         err,
                       );
                       return db.rollback(() => {
                         return res.status(500).json({
-                          message: "Error checking previous role exists",
+                          message: "Error checking new role id is valid",
                         });
                       });
                     }
@@ -750,70 +644,69 @@ export const update_user_role_controller = async (req, res) => {
                       return db.rollback(() => {
                         return res
                           .status(404)
-                          .json({ message: "Previous role not found" });
+                          .json({ message: "New role id is not valid" });
                       });
                     }
 
-                    const update_user_role_query =
-                      "UPDATE apt_user_roles set role_id = ? where user_id = ? and role_id = ?";
+                    // if role name is admin so then return an err
+                    if (result[0].role_name === "admin" || result[0].role_name === "Admin") {
+                      return db.rollback(() => {
+                        return res
+                          .status(403)
+                          .json({
+                            message:
+                              "You are not authorized to update the role of admin",
+                          });
+                      });
+                    }
+
+                    // Assign New Role To The User
+                    const assign_new_role_to_user_query =
+                      "UPDATE apt_user_roles SET role_id = ? WHERE user_id = ? and org_id = ?";
                     db.query(
-                      update_user_role_query,
-                      [new_role_id, user_id, previous_role_id],
+                      assign_new_role_to_user_query,
+                      [new_role_id, user_id, organization_id],
                       (err, result) => {
                         if (err) {
-                          console.error("Error updating user role: ", err);
+                          console.error(
+                            "Error assigning new role to user: ",
+                            err,
+                          );
                           return db.rollback(() => {
-                            return res
-                              .status(500)
-                              .json({ message: "Error updating user role" });
+                            return res.status(500).json({
+                              message: "Error assigning new role to user",
+                            });
                           });
                         }
-
-                        // Save This Whole Activity ::
-                        const save_activity = `INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value) VALUES (?, ?, ?, ?, ?)`;
-                        db.query(
-                          save_activity,
-                          [
-                            admin_id,
-                            user_id,
-                            "UPDATE_USER",
-                            JSON.stringify(previous_role_id),
-                            JSON.stringify(new_role_id),
-                          ],
-                          (err, result) => {
-                            if (err) {
-                              console.error("Error saving activity: ", err);
-                              return db.rollback(() => {
-                                return res
-                                  .status(500)
-                                  .json({ message: "Error saving activity" });
-                              });
-                            }
-                            return db.commit(() => {
-                              return res.status(200).json({
-                                message: "User role updated successfully",
-                                result: result.affectedRows,
-                              });
+                        if (result.affectedRows === 0) {
+                          return db.rollback(() => {
+                            return res.status(404).json({
+                              message: "New role not assigned to user",
                             });
-                          },
-                        );
+                          });
+                        }
+                        return db.commit(() => {
+                          return res.status(200).json({
+                            message: "New role assigned to user successfully",
+                          });
+                        });
                       },
                     );
                   },
                 );
-              });
-            });
+              },
+            );
           },
         );
       });
-    }
+    });
   } catch (error) {
     console.error("Error updating user role: ", error);
     res.status(500).json({ message: "Error updating user role" });
   }
 };
 
-export const update_user_name_email_phone_password_controller = async (
+export const update_user_name_email_phone_password_controller1 = async (
   req,
   res,
 ) => {
@@ -862,139 +755,155 @@ export const update_user_name_email_phone_password_controller = async (
           }
           const organization_id = result[0].id;
 
-          // Check If User Is Valid
-          const user_check =
-            "SELECT * from apt_users where id = ? and orgID = ?";
-          db.query(user_check, [user_id, organization_id], (err, result) => {
-            if (err) {
-              console.error("Error checking user exists: ", err);
-              return db.rollback(() => {
-                return res
-                  .status(500)
-                  .json({ message: "Error checking user exists" });
-              });
-            }
-            if (result.length === 0) {
-              return db.rollback(() => {
-                return res.status(404).json({ message: "User not found" });
-              });
-            }
-            const user = result[0];
-            if (!user) {
-              return db.rollback(() => {
-                return res.status(404).json({ message: "User not found" });
-              });
-            }
-
-            const target_role_query =
-              "SELECT apt_roles.role_name as user_role_name FROM apt_user_roles JOIN apt_roles ON apt_roles.id = apt_user_roles.role_id WHERE apt_user_roles.user_id = ?";
-            db.query(target_role_query, [user_id], (err, result) => {
+          // Check If User Is Member Of The Organization
+          const user_is_member_of_organization_check =
+            "SELECT user_id from apt_org_members where user_id = ? and org_id = ?";
+          db.query(
+            user_is_member_of_organization_check,
+            [user_id, organization_id],
+            (err, result) => {
               if (err) {
+                console.error(
+                  "Error checking user is member of organization: ",
+                  err,
+                );
                 return db.rollback(() => {
-                  return res
-                    .status(500)
-                    .json({ message: "Error checking target user role" });
+                  return res.status(500).json({
+                    message: "Error checking user is member of organization",
+                  });
                 });
               }
               if (result.length === 0) {
                 return db.rollback(() => {
-                  return res
-                    .status(404)
-                    .json({ message: "User role not found" });
+                  return res.status(404).json({
+                    message: "User is not a member of the organization",
+                  });
                 });
               }
 
-              const targetRole = result[0].user_role_name;
-              if (targetRole === "admin" || targetRole === "hr") {
+              const member_user_id = result[0].user_id;
+              if (member_user_id !== user_id) {
                 return db.rollback(() => {
-                  return res
-                    .status(403)
-                    .json({ message: "HR cannot update admin or HR users" });
+                  return res.status(403).json({
+                    message: "You are not authorized to update this user",
+                  });
                 });
               }
 
-              // Update If Name Is Provided Or Email Is Provided Or Phone Is Provided Or Password Is Provided
-              let fields = [];
-              let values = [];
-
-              if (name) {
-                fields.push("user_name = ?");
-                values.push(name);
-              }
-              if (email) {
-                fields.push("user_email = ?");
-                values.push(email);
-              }
-              if (phone) {
-                fields.push("user_phone = ?");
-                values.push(phone);
-              }
-              if (password) {
-                fields.push("user_password = ?");
-                values.push(hashedPassword);
-              }
-
-              if (fields.length === 0) {
-                return db.rollback(() => {
-                  return res.status(400).json({ message: "Nothing to update" });
-                });
-              }
-
-              const query = `UPDATE apt_users SET ${fields.join(", ")} WHERE id = ?`;
-              values.push(user_id);
-
-              db.query(query, values, (err, result) => {
+              const target_role_query =
+                "SELECT apt_roles.role_name as user_role_name FROM apt_user_roles JOIN apt_roles ON apt_roles.id = apt_user_roles.role_id WHERE apt_user_roles.user_id = ?";
+              db.query(target_role_query, [member_user_id], (err, result) => {
                 if (err) {
                   return db.rollback(() => {
                     return res
                       .status(500)
-                      .json({ message: "Error updating user" });
+                      .json({ message: "Error checking target user role" });
+                  });
+                }
+                if (result.length === 0) {
+                  return db.rollback(() => {
+                    return res
+                      .status(404)
+                      .json({ message: "User role not found" });
                   });
                 }
 
-                const save_activity =
-                  "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value) VALUES (?, ?, ?, ?, ?)";
-                const oldValue = {
-                  user_name: user.user_name,
-                  user_email: user.user_email,
-                  user_phone: user.user_phone,
-                };
-                const newValue = {
-                  user_name: name || user.user_name,
-                  user_email: email || user.user_email,
-                  user_phone: phone || user.user_phone,
-                  password_updated: Boolean(password),
-                };
+                const targetRole = result[0].user_role_name;
+                if (targetRole === "admin" || targetRole === "hr") {
+                  return db.rollback(() => {
+                    return res
+                      .status(403)
+                      .json({ message: "HR cannot update admin or HR users" });
+                  });
+                }
 
-                db.query(
-                  save_activity,
-                  [
-                    admin_id,
-                    user_id,
-                    "UPDATE_USER_DETAILS",
-                    JSON.stringify(oldValue),
-                    JSON.stringify(newValue),
-                  ],
-                  (err) => {
-                    if (err) {
-                      return db.rollback(() => {
-                        return res
-                          .status(500)
-                          .json({ message: "Error saving activity" });
-                      });
-                    }
+                // Update If Name Is Provided Or Email Is Provided Or Phone Is Provided Or Password Is Provided
+                let fields = [];
+                let values = [];
 
-                    return db.commit(() => {
-                      return res.status(200).json({
-                        message: "User updated successfully",
-                        affectedRows: result.affectedRows,
-                      });
+                if (name) {
+                  fields.push("user_name = ?");
+                  values.push(name);
+                }
+                if (email) {
+                  fields.push("user_email = ?");
+                  values.push(email);
+                }
+                if (phone) {
+                  fields.push("user_phone = ?");
+                  values.push(phone);
+                }
+                if (password) {
+                  fields.push("user_password = ?");
+                  values.push(hashedPassword);
+                }
+
+                if (fields.length === 0) {
+                  return db.rollback(() => {
+                    return res
+                      .status(400)
+                      .json({ message: "Nothing to update" });
+                  });
+                }
+
+                const query = `UPDATE apt_users SET ${fields.join(", ")} WHERE id = ?`;
+                values.push(user_id);
+
+                db.query(query, values, (err, result) => {
+                  if (err) {
+                    return db.rollback(() => {
+                      return res
+                        .status(500)
+                        .json({ message: "Error updating user" });
                     });
-                  },
-                );
+                  }
+
+                  const save_activity =
+                    "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value, action_reason, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)";
+                  const oldValue = {
+                    user_name: user.user_name,
+                    user_email: user.user_email,
+                    user_phone: user.user_phone,
+                  };
+                  const newValue = {
+                    user_name: name || user.user_name,
+                    user_email: email || user.user_email,
+                    user_phone: phone || user.user_phone,
+                    password_updated: Boolean(password),
+                  };
+
+                  db.query(
+                    save_activity,
+                    [
+                      admin_id,
+                      user_id,
+                      "UPDATE_USER_DETAILS",
+                      JSON.stringify(oldValue),
+                      JSON.stringify(newValue),
+                      "Updated User Details",
+                      organization_id,
+                    ],
+                    (err) => {
+                      if (err) {
+                        return db.rollback(() => {
+                          return res
+                            .status(500)
+                            .json({ message: "Error saving activity" });
+                        });
+                      }
+
+                      return db.commit(() => {
+                        return res.status(200).json({
+                          message: "User updated successfully",
+                          affectedRows: result.affectedRows,
+                        });
+                      });
+                    },
+                  );
+                });
               });
-            });
-          });
+            },
+          );
         });
       });
     } else {
@@ -1104,19 +1013,202 @@ export const update_user_name_email_phone_password_controller = async (
   }
 };
 
-
-// Future Implementaion Note:: HR Can Delete Admin and Another HR 
-export const delete_user_controller = async (req, res) => {
+// Update USer Name, Email, Phone, Password ::
+export const update_user_name_email_phone_password_controller = async (
+  req,
+  res,
+) => {
   try {
-    const { user_id } = req.body;
-    if (!user_id) {
+    const { user_id, name, email, phone, password, org_id } = req.body;
+
+    if (!user_id || !org_id) {
       return res.status(400).json({ message: "User ID is required" });
     }
     const user = req.user;
-    if (!user || (user.user_role_name !== "admin" && user.user_role_name !== "hr")) {
+    if (
+      !user ||
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
+    ) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    const admin_id = user.user_id;
+    const action_user_id = user.user_id;
+
+    let hashedPassword = null;
+    if (password) {
+      hashedPassword = await bcrypt.hash(password, 10);
+    }
+
+    // Transaction Block ::
+    db.beginTransaction((err) => {
+      if (err) {
+        console.error("Transaction error: ", err);
+        return db.rollback(() => {
+          return res.status(500).json({ message: "Transaction error" });
+        });
+      }
+
+      // Check If Organization and Admin Is Valid
+      const organization_check =
+        "SELECT id, owner_id  from apt_organizations where id = ?";
+      db.query(organization_check, [org_id], (err, result) => {
+        if (err) {
+          console.error("Error checking organization exists: ", err);
+          return db.rollback(() => {
+            return res
+              .status(500)
+              .json({ message: "Error checking organization exists" });
+          });
+        }
+
+        if (result.length === 0) {
+          return db.rollback(() => {
+            return res.status(404).json({ message: "Organization not found" });
+          });
+        }
+        const organization_id = result[0].id;
+
+        const admin_id = result[0].owner_id;
+
+        // Check If User Is Valid Member Of The Organization
+        const user_check =
+          "SELECT user_id from apt_org_members where user_id = ? and org_id = ?";
+        db.query(user_check, [user_id, organization_id], (err, result) => {
+          if (err) {
+            console.error(
+              "Error checking user is member of organization: ",
+              err,
+            );
+            return db.rollback(() => {
+              return res.status(500).json({
+                message: "Error checking user is member of organization",
+              });
+            });
+          }
+          if (result.length === 0) {
+            return db.rollback(() => {
+              return res
+                .status(404)
+                .json({ message: "User is not a member of the organization" });
+            });
+          }
+          const member_user_id = result[0].user_id;
+          // if (member_user_id !== user_id) {
+          //   return db.rollback(() => {
+          //     return res.status(403).json({
+          //       message: "You are not authorized to update this user",
+          //     });
+          //   });
+          // }
+
+          // Assign Values To Update ::
+          let fields = [];
+          let values = [];
+          if (name) {
+            fields.push("user_name = ?");
+            values.push(name);
+          }
+          if (email) {
+            fields.push("user_email = ?");
+            values.push(email);
+          }
+          if (phone) {
+            fields.push("user_phone = ?");
+            values.push(phone);
+          }
+          if (password) {
+            fields.push("user_password = ?");
+            values.push(hashedPassword);
+          }
+
+          if (fields.length === 0) {
+            return db.rollback(() => {
+              return res.status(400).json({ message: "Nothing to update" });
+            });
+          }
+          const get_old_user =
+            "SELECT user_name, user_email, user_phone FROM apt_users WHERE id = ?";
+          const oldValue = get_old_user[0];
+
+          const newValue = {
+            user_name: name || oldValue.user_name,
+            user_email: email || oldValue.user_email,
+            user_phone: phone || oldValue.user_phone,
+            password_updated: Boolean(password),
+          };
+          // HR Cannot Update Admin
+          let update_query = `UPDATE apt_users SET ${fields.join(", ")} WHERE id = ? AND id != ?`;
+
+          values.push(user_id);
+          values.push(admin_id);
+
+          db.query(update_query, values, (err, result) => {
+            if (err) {
+              return db.rollback(() => {
+                return res.status(500).json({ message: "Error updating user" });
+              });
+            }
+            if (result.affectedRows === 0) {
+              return db.rollback(() => {
+                return res.status(404).json({
+                  message: "Cannot update organization owner or user not found",
+                });
+              });
+            }
+
+            // Save This Whole Activity ::
+            const save_activity = `INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value, action_reason, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+            db.query(
+              save_activity,
+              [
+                action_user_id,
+                user_id,
+                "UPDATE_USER_DETAILS",
+                JSON.stringify(oldValue),
+                JSON.stringify(newValue),
+                "Updated User Details",
+                organization_id,
+              ],
+              (err) => {
+                if (err) {
+                  return db.rollback(() => {
+                    return res
+                      .status(500)
+                      .json({ message: "Error saving activity" });
+                  });
+                }
+                return db.commit(() => {
+                  return res.status(200).json({
+                    message: "User updated successfully",
+                    affectedRows: result.affectedRows,
+                  });
+                });
+              },
+            );
+          });
+        });
+      });
+    });
+  } catch (error) {
+    console.log("Error updating user name email phone password: ", error);
+    res.status(500).json({ message: "Internal Server Error" });
+  }
+};
+
+// Future Implementaion Note:: HR Can't Delete Admin and Another HR
+export const delete_user_controller = async (req, res) => {
+  try {
+    const { user_id, org_id } = req.body;
+    if (!user_id || !org_id) {
+      return res.status(400).json({ message: "User ID is required" });
+    }
+    const user = req.user;
+    if (
+      !user ||
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
+    ) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+    const action_user_id = user.user_id;
     // Check If Organization and Admin Is Valid
     db.beginTransaction((err) => {
       if (err) {
@@ -1126,8 +1218,8 @@ export const delete_user_controller = async (req, res) => {
         });
       }
       const organization_check =
-        "SELECT id from apt_organizations where owner_id = ?";
-      db.query(organization_check, [admin_id], (err, result) => {
+        "SELECT id, owner_id from apt_organizations where id = ?";
+      db.query(organization_check, [org_id], (err, result) => {
         if (err) {
           console.error("Error checking organization exists: ", err);
           return db.rollback(() => {
@@ -1142,44 +1234,102 @@ export const delete_user_controller = async (req, res) => {
           });
         }
         const organization_id = result[0].id;
-
-        // Check If User Is Valid
-        const user_check = "SELECT * from apt_users where id = ? and orgID = ?";
+        const admin_id = result[0].owner_id;
+        // Check If User Is Valid Member Of The Organization
+        const user_check =
+          "SELECT user_id from apt_org_members where user_id = ? and org_id = ?";
         db.query(user_check, [user_id, organization_id], (err, result) => {
           if (err) {
-            console.error("Error checking user exists: ", err);
+            console.error(
+              "Error checking user is member of organization: ",
+              err,
+            );
             return db.rollback(() => {
-              return res
-                .status(500)
-                .json({ message: "Error checking user exists" });
+              return res.status(500).json({
+                message: "Error checking user is member of organization",
+              });
             });
           }
           if (result.length === 0) {
             return db.rollback(() => {
-              return res.status(404).json({ message: "User not found" });
+              return res
+                .status(404)
+                .json({ message: "User is not a member of the organization" });
             });
           }
-          const user = result[0];
-          if (!user) {
-            return db.rollback(() => {
-              return res.status(404).json({ message: "User not found" });
-            });
-          }
-          // Delete User
-          const delete_user_query = "DELETE from apt_users where id = ?";
-          db.query(delete_user_query, [user_id], (err, result) => {
+          // Get All The User Information For Activity Log ::
+          const get_user_information =
+            "SELECT id, user_name, user_email, user_phone FROM apt_users WHERE id = ?";
+          db.query(get_user_information, [user_id], (err, result) => {
             if (err) {
-              console.error("Error deleting user: ", err);
               return db.rollback(() => {
-                return res.status(500).json({ message: "Error deleting user" });
+                return res
+                  .status(500)
+                  .json({ message: "Error getting user information" });
               });
             }
-            return db.commit(() => {
-              return res.status(200).json({
-                message: "User deleted successfully",
-                affectedRows: result.affectedRows,
+            if (result.length === 0) {
+              return db.rollback(() => {
+                return res.status(404).json({ message: "User not found" });
               });
-            });
+            }
+            const user_information = result[0];
+            // Save This Whole Activity ::
+            const save_activity = `INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, action_type, old_value, new_value, action_reason, org_id) VALUES (?, ?, ?, ?, ?, ?, ?)`;
+            db.query(
+              save_activity,
+              [
+                action_user_id,
+                user_id,
+                "DELETE_USER",
+                JSON.stringify(user_information),
+                JSON.stringify({}),
+                "Deleted User",
+                organization_id,
+              ],
+              (err) => {
+                if (err) {
+                  console.log("Error saving activity: ", err);
+                  return db.rollback(() => {
+                    return res
+                      .status(500)
+                      .json({ message: "Error saving activity" });
+                  });
+                }
+                // Delete User
+                const delete_user_query =
+                  "DELETE from apt_users where id = ? AND id != ?";
+                db.query(
+                  delete_user_query,
+                  [user_id, admin_id],
+                  (err, result) => {
+                    if (err) {
+                      console.error("Error deleting user: ", err);
+                      return db.rollback(() => {
+                        return res
+                          .status(500)
+                          .json({ message: "Error deleting user" });
+                      });
+                    }
+                    if (result.affectedRows === 0) {
+                      return db.rollback(() => {
+                        return res.status(404).json({
+                          message:
+                            "Cannot delete organization owner or user not found",
+                        });
+                      });
+                    }
+
+                    return db.commit(() => {
+                      return res.status(200).json({
+                        message: "User deleted successfully",
+                        affectedRows: result.affectedRows,
+                      });
+                    });
+                  },
+                );
+              },
+            );
           });
         });
       });
@@ -1190,7 +1340,7 @@ export const delete_user_controller = async (req, res) => {
   }
 };
 
-// Delete Users :: It Will Handle By HR Only :: Future Implementaion Note:: HR Can Delete Admin and Another HR 
+// Delete Users :: It Will Handle By Admin Only ::
 export const delete_users_controller = async (req, res) => {
   try {
     const { user_ids, organization_id } = req.body; // user_ids = [1, 2, 3]
@@ -1207,7 +1357,7 @@ export const delete_users_controller = async (req, res) => {
         .json({ message: "User IDs and organization ID are required" });
     }
     const user = req.user;
-    if (!user || user.user_role_name !== "hr") {
+    if (!user || user.user_role_name !== "admin") {
       return res.status(401).json({ message: "Unauthorized" });
     }
     const hr_id = user.user_id;

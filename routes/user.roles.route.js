@@ -7,6 +7,11 @@ const router = Router();
 router.post("/create-user-role", user_validation_middleware, user_authorization("admin", "hr"), create_user_role_controller);
 router.patch("/update-user-role", user_validation_middleware, user_authorization("admin", "hr"), update_user_role_controller);
 router.delete("/delete-user-role", user_validation_middleware, user_authorization("admin", "hr"), delete_user_role_controller);
-router.get("/get-all-user-roles", user_validation_middleware, user_authorization("admin"), get_all_user_roles_controller);
+router.post(
+  "/get-all-user-roles",
+  user_validation_middleware,
+  user_authorization("admin", "hr"),
+  get_all_user_roles_controller,
+);
 
 export default router;

@@ -4,8 +4,7 @@ import db from "../db/connect.js";
 // :: Tested and Working Fine ::
 export const create_user_role_controller = async (req, res) => {
   try {
-    const { role_name, organization_id } = req.body;
-
+    const { role_name, organization_id } = req.body; 
     if (!role_name || !organization_id) {
       return res.status(400).json({
         message: "Role name and organization id are required",
@@ -28,7 +27,7 @@ export const create_user_role_controller = async (req, res) => {
     const [role] = await db
       .promise()
       .query(
-        "SELECT * FROM apt_roles WHERE role_name = ? AND orgId = ?",
+        "SELECT * FROM apt_roles WHERE role_name = ? AND org_id = ?",
         [lower_case_role_name, organization_id],
       );
     if (role.length > 0) {
@@ -39,7 +38,7 @@ export const create_user_role_controller = async (req, res) => {
     const [result] = await db
       .promise()
       .query(
-        "INSERT INTO apt_roles (role_name, orgId) VALUES (?, ?)",
+        "INSERT INTO apt_roles (role_name, org_id) VALUES (?, ?)",
         [lower_case_role_name, organization_id],
       );
 
@@ -69,7 +68,7 @@ export const update_user_role_controller = async (req, res) => {
     const [result] = await db
       .promise()
       .query(
-        "UPDATE apt_roles SET role_name = ? WHERE id = ? AND orgId = ?",
+        "UPDATE apt_roles SET role_name = ? WHERE id = ? AND org_id = ?",
         [lower_case_role_name, role_id, organization_id],
       );
 
@@ -110,7 +109,7 @@ export const delete_user_role_controller = async (req, res) => {
 
     const [result] = await db
       .promise()
-      .query("DELETE FROM apt_roles WHERE id = ? AND orgId = ?", [
+      .query("DELETE FROM apt_roles WHERE id = ? AND org_id = ?", [
         role_id,
         organization_id,
       ]);
@@ -132,7 +131,7 @@ export const delete_user_role_controller = async (req, res) => {
 // :: Tested and Working Fine ::
 export const get_all_user_roles_controller = async (req, res) => {
   try {
-    const { organization_id } = req.body;
+    const organization_id = req.body.organization_id ?? req.query.organization_id;
     if (!organization_id) {
       return res.status(400).json({ message: "Organization id is required" });
     }
@@ -143,11 +142,12 @@ export const get_all_user_roles_controller = async (req, res) => {
     if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
       return res.status(403).json({ message: "Forbidden" });
     }
-    const [roles] = await db
-      .promise()
-      .query("SELECT * FROM apt_roles WHERE orgId = ?", [
-        organization_id,
-      ]);
+    const [roles] = await db.promise().query(
+      `SELECT * FROM apt_roles
+       WHERE org_id = ?
+         AND LOWER(TRIM(role_name)) != ?`,
+      [organization_id, "admin"],
+    );
     return res
       .status(200)
       .json({ message: "User roles fetched successfully", data: roles });

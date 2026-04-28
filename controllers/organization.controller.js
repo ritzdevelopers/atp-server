@@ -182,7 +182,7 @@ export const create_organization_controller = async (req, res) => {
 
 export const get_organization_controller = async (req, res) => {
   try {
-    const { user_id, user_role_id, user_role_name, user_email } = req.user;
+    const { user_id, user_role_id, user_role_name } = req.user;
 
     // Fetch Organization From apt_org_members
     const fetch_organization_from_org_members_query =
@@ -206,14 +206,26 @@ export const get_organization_controller = async (req, res) => {
         success: false,
       });
     }
+    // Fetch User Info ::
+    const fetch_user_info_query = `SELECT id, user_name, user_email, user_phone, created_at FROM apt_users WHERE id = ?`;
+    const [user_info] = await db
+      .promise()
+      .query(fetch_user_info_query, [user_id]);
+    if (user_info.length === 0) {
+      return res.status(404).json({
+        error: "User not found",
+        message: "User not found",
+        success: false,
+      });
+    }
+
 
     // Fetch Organization
     const fetch_organization_query = `SELECT apt_organizations.*,  
                                     
                                      apt_users.user_name AS owner_name,
                                      apt_users.user_email AS owner_email,
-                                     apt_users.user_phone AS owner_phone, 
-                                     apt_users.user_role_name AS owner_role_name
+                                     apt_users.user_phone AS owner_phone
                                      FROM apt_organizations 
                                      INNER JOIN apt_users ON apt_organizations.owner_id = apt_users.id 
                                      WHERE apt_organizations.id = ?`;
@@ -295,9 +307,7 @@ export const get_organization_controller = async (req, res) => {
         },
         features: filtered_features,
         user: {
-          user_id: user_id,
-          user_email: user_email,
-          user_role_id: user_role_id,
+          ...user_info[0], 
           user_role_name: user_role_name,
         },
       },

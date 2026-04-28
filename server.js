@@ -32,6 +32,11 @@ app.use("/api/user", userRoutes);
 app.use("/api/user-roles", userRolesRoutes);
 
 
+
+// Attendance Routes
+app.use("/api/attendance", attendanceRoutes);
+
+
 app.listen(3000, () => {
   db.connect();
   console.log("Server is running on port 3000");
