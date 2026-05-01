@@ -477,7 +477,17 @@ export const get_all_users_controller = async (req, res) => {
     apt_org_members.created_at,
 
     apt_user_roles.role_id,
-    apt_roles.role_name
+    apt_roles.role_name,
+
+    user_shifts.shift_id as user_shift_id,
+    user_shifts.assigned_by_name as shift_assigned_by_name,
+
+
+    shifts.shift_name as user_shift_name,
+    shifts.start_time as user_shift_start_time,
+    shifts.end_time as user_shift_end_time,
+    shifts.working_days as user_shift_working_days,
+    shifts.is_night_shift as is_night_shift
 
   FROM apt_org_members 
   INNER JOIN apt_users 
@@ -486,6 +496,10 @@ export const get_all_users_controller = async (req, res) => {
     ON apt_user_roles.user_id = apt_users.id AND apt_user_roles.org_id = apt_org_members.org_id
   INNER JOIN apt_roles
     ON apt_roles.id = apt_user_roles.role_id AND apt_roles.org_id = apt_org_members.org_id
+  LEFT JOIN user_shifts
+    ON user_shifts.user_id = apt_users.id AND user_shifts.org_id = apt_org_members.org_id
+  LEFT JOIN shifts
+    ON shifts.id = user_shifts.shift_id AND shifts.org_id = apt_org_members.org_id
   WHERE apt_org_members.org_id = ?
 `;
 
@@ -498,6 +512,7 @@ export const get_all_users_controller = async (req, res) => {
         return res.status(200).json({
           message: "Users fetched successfully",
           users: result,
+          
         });
       });
     });
@@ -649,14 +664,15 @@ export const update_user_role_controller = async (req, res) => {
                     }
 
                     // if role name is admin so then return an err
-                    if (result[0].role_name === "admin" || result[0].role_name === "Admin") {
+                    if (
+                      result[0].role_name === "admin" ||
+                      result[0].role_name === "Admin"
+                    ) {
                       return db.rollback(() => {
-                        return res
-                          .status(403)
-                          .json({
-                            message:
-                              "You are not authorized to update the role of admin",
-                          });
+                        return res.status(403).json({
+                          message:
+                            "You are not authorized to update the role of admin",
+                        });
                       });
                     }
 

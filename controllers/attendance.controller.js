@@ -5,14 +5,7 @@ export const markAttendanceController = async (req, res) => {
   const { org_id, user_date, user_time } = req.body;
   const { user_id, user_email, user_role_name } = req.user;
 
-  if (
-    !user_id ||
-    !user_email ||
-    !user_role_name ||
-    !org_id ||
-    !user_date ||
-    !user_time
-  ) {
+  if (!user_id || !user_email || !user_role_name || !org_id || !user_date || !user_time) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
@@ -22,53 +15,62 @@ export const markAttendanceController = async (req, res) => {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
-    //  1. Check Org
+    // 1. Check Org
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id],
+      [org_id]
     );
     if (org.length === 0) {
       await connection.rollback();
       return res.status(404).json({ message: "Organization not found" });
     }
 
-    //  2. Check Membership
+    // 2. Check Membership
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id],
+      [user_id, org_id]
     );
     if (member.length === 0) {
       await connection.rollback();
       return res.status(403).json({ message: "User not part of organization" });
     }
 
-    //  3. Get User Name
+    // 3. Get User Name
     const [userRow] = await connection.query(
       "SELECT user_name FROM apt_users WHERE id = ?",
-      [user_id],
+      [user_id]
     );
     const user_name = userRow[0].user_name;
 
-    //  4. IP Check
+    // 4. IP Check
     const [ips] = await connection.query(
-      "SELECT ip_address FROM apt_company_ip_addresses WHERE org_id = ?",
-      [org_id],
+      "SELECT ip_address FROM organization_ips WHERE org_id = ?",
+      [org_id]
     );
 
     const allowedIps = ips.map((i) => i.ip_address);
     const userIp = getUserIP(req);
 
-    if (!allowedIps.includes(userIp)) {
+    if (userIp !== "::1" && !allowedIps.includes(userIp)) {
       await connection.rollback();
-      return res.status(403).json({
-        message: "Unauthorized IP. Contact Admin",
-      });
+      return res.status(403).json({ message: "Unauthorized IP" });
     }
 
-    //  5. Get User Shift
+    // 5. Check duplicate attendance
+    const [attendance] = await connection.query(
+      "SELECT id FROM attendance WHERE user_id = ? AND org_id = ? AND attendance_date = ?",
+      [user_id, org_id, user_date]
+    );
+
+    if (attendance.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Attendance already marked" });
+    }
+
+    // 6. Get Shift
     const [shiftRow] = await connection.query(
       "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id],
+      [user_id, org_id]
     );
 
     if (shiftRow.length === 0) {
@@ -78,88 +80,68 @@ export const markAttendanceController = async (req, res) => {
 
     const shift_id = shiftRow[0].shift_id;
 
-    //  6. Get Shift Data
     const [shift] = await connection.query(
-      `SELECT start_time, end_time, late_after, half_day_hours, short_leave_hours 
-       FROM shifts WHERE id = ?`,
-      [shift_id],
+      `SELECT start_time, late_after FROM shifts WHERE id = ?`,
+      [shift_id]
     );
 
-    const {
-      start_time,
-      end_time,
-      late_after,
-      half_day_hours,
-      short_leave_hours,
-    } = shift[0];
+    const { start_time, late_after } = shift[0];
 
-    //  7. Check duplicate attendance
-    const [attendance] = await connection.query(
-      "SELECT check_in FROM apt_attendances WHERE user_id = ? AND org_id = ? AND attendance_date = ?",
-      [user_id, org_id, user_date],
-    );
-
-    if (attendance.length > 0) {
-      await connection.rollback();
-      return res.status(400).json({ message: "Attendance already marked" });
-    }
-
-    //  8. Validate Date
-    const today = new Date().toISOString().split("T")[0];
-    if (today !== user_date) {
-      await connection.rollback();
-      return res.status(400).json({ message: "Invalid date" });
-    }
-
-    //  9. Time Conversion (24-hour)
+    // ---------- TIME HELPER ----------
     const toMinutes = (time) => {
-      const [h, m] = time.split(":");
-      return parseInt(h) * 60 + parseInt(m);
+      if (!time) return NaN;
+
+      if (time instanceof Date) {
+        return time.getHours() * 60 + time.getMinutes();
+      }
+
+      const [h, m] = String(time).split(":").map(Number);
+      return h * 60 + m;
     };
 
     const userMin = toMinutes(user_time);
-    const startMin = toMinutes(start_time);
     const lateMin = toMinutes(late_after);
-    const shortMin = toMinutes(short_leave_hours);
-    const halfMin = toMinutes(half_day_hours);
-    const endMin = toMinutes(end_time);
 
-    //  10. Attendance Logic (fixed order)
+    if (isNaN(userMin) || isNaN(lateMin)) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Invalid time format" });
+    }
+
+    // ---------- STATUS LOGIC ----------
     let status = "present";
 
-    if (userMin > halfMin) {
-      status = "half_day";
-    } else if (userMin > shortMin) {
-      status = "short_leave";
-    } else if (userMin > lateMin) {
+    if (userMin > lateMin) {
       status = "late";
     }
 
-    //  11. Insert Attendance
-    const insertQuery = `
-      INSERT INTO apt_attendances 
-      (user_id, user_name, user_email, user_role_name, org_id, attendance_date, check_in, check_out, attendance_status)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `;
+    // ---------- DATETIME FORMAT ----------
+    const checkInDateTime = `${user_date} ${user_time}`;
 
-    await connection.query(insertQuery, [
-      user_id,
-      user_name,
-      user_email,
-      user_role_name,
-      org_id,
-      user_date,
-      user_time,
-      null,
-      status,
-    ]);
+    // ---------- INSERT ----------
+    await connection.query(
+      `INSERT INTO attendance 
+       (user_id, user_name, user_email, user_role_name, org_id, attendance_date, check_in, check_out, attendance_status)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user_id,
+        user_name,
+        user_email,
+        user_role_name,
+        org_id,
+        user_date,
+        checkInDateTime,
+        null,
+        status,
+      ]
+    );
 
     await connection.commit();
 
     return res.status(200).json({
-      message: "Attendance marked successfully",
+      message: "Check-in marked successfully",
       status,
     });
+
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error:", error);
@@ -191,54 +173,54 @@ export const markCheckOutAttendanceController = async (req, res) => {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
-    //  1. Check Org
+    // 1. Check Org
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
     if (org.length === 0) {
       await connection.rollback();
       return res.status(404).json({ message: "Organization not found" });
     }
 
-    //  2. Check Membership
+    // 2. Check Membership
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
     if (member.length === 0) {
       await connection.rollback();
       return res.status(403).json({ message: "User not part of organization" });
     }
 
-    //  3. IP Check
+    // 3. IP Check
     const [ips] = await connection.query(
-      "SELECT ip_address FROM apt_company_ip_addresses WHERE org_id = ?",
-      [org_id]
+      "SELECT ip_address FROM organization_ips WHERE org_id = ?",
+      [org_id],
     );
 
-    const allowedIps = ips.map(i => i.ip_address);
+    const allowedIps = ips.map((i) => i.ip_address);
     const userIp = getUserIP(req);
 
-    if (!allowedIps.includes(userIp)) {
+    if (userIp !== "::1" && !allowedIps.includes(userIp)) {
       await connection.rollback();
       return res.status(403).json({
-        message: "Unauthorized IP. Contact Admin"
+        message: "Unauthorized IP. Contact Admin",
       });
     }
 
-    //  4. Check Attendance Exists (IMPORTANT)
+    // 4. Check Attendance Exists
     const [attendance] = await connection.query(
-      `SELECT check_in, check_out, attendance_status 
-       FROM apt_attendances 
+      `SELECT id, check_in, check_out, attendance_status 
+       FROM attendance 
        WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
-      [user_id, org_id, user_date]
+      [user_id, org_id, user_date],
     );
 
     if (attendance.length === 0) {
       await connection.rollback();
       return res.status(400).json({
-        message: "Check-in not found. Please check-in first"
+        message: "Check-in not found. Please check-in first",
       });
     }
 
@@ -247,59 +229,120 @@ export const markCheckOutAttendanceController = async (req, res) => {
     if (existing.check_out) {
       await connection.rollback();
       return res.status(400).json({
-        message: "Check-out already done"
+        message: "Check-out already done",
       });
     }
 
-    //  5. Get Shift
+    // 5. Get Shift
     const [shiftRow] = await connection.query(
       "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
+
+    if (shiftRow.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Shift not assigned" });
+    }
 
     const shift_id = shiftRow[0].shift_id;
 
     const [shift] = await connection.query(
-      `SELECT start_time, end_time, half_day_hours 
+      `SELECT start_time, end_time, half_day_hours, short_leave_hours
        FROM shifts WHERE id = ?`,
-      [shift_id]
+      [shift_id],
     );
 
-    const { start_time, end_time, half_day_hours } = shift[0];
+    const { start_time, end_time, half_day_hours, short_leave_hours } =
+      shift[0];
 
-    //  6. Time Convert
-    const toMinutes = (time) => {
-      const [h, m] = time.split(":");
-      return parseInt(h) * 60 + parseInt(m);
+    const previousStatus = existing.attendance_status;
+
+    // ---------- TIME HELPERS ----------
+    const toSeconds = (t) => {
+      const [h, m, s] = t.split(":").map(Number);
+      return h * 3600 + m * 60 + s;
     };
 
-    const checkInMin = toMinutes(existing.check_in);
-    const checkOutMin = toMinutes(user_time);
-    const endMin = toMinutes(end_time);
-    const halfMin = toMinutes(half_day_hours);
+    const calculateWorkingTime = (start, end) => {
+      const diff = toSeconds(end) - toSeconds(start);
+      if (diff < 0) throw new Error("End time must be greater than start time");
+      return diff / 60; // minutes
+    };
 
-    //  7. Calculate Working Hours
-    const workedMinutes = checkOutMin - checkInMin;
+    const timeToMinutes = (time) => {
+      const [h, m, s] = time.split(":").map(Number);
+      return h * 60 + m + s / 60;
+    };
 
-    //  8. Final Status Update Logic (IMPORTANT )
-    let finalStatus = existing.attendance_status;
+    // ---------- CALCULATIONS ----------
 
-    // If worked very less → half day
-    if (workedMinutes < halfMin) {
-      finalStatus = "half_day";
+    // Shift working minutes
+    const realWorkingMinutes = calculateWorkingTime(start_time, end_time);
+
+    // User working minutes
+    const checkInTime = new Date(existing.check_in)
+      .toTimeString()
+      .split(" ")[0];
+
+    const checkoutParsed = new Date(user_time);
+    if (Number.isNaN(checkoutParsed.getTime())) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Invalid user_time" });
     }
 
-    // Optional: early checkout
-    if (checkOutMin < endMin && workedMinutes >= halfMin) {
-      finalStatus = "short_leave";
+    const checkOutTime = checkoutParsed.toTimeString().split(" ")[0];
+
+    console.log(
+      "Check Out Time:",
+      checkOutTime,
+      "Split Check In Time: ",
+      checkInTime,
+      "User Time:",
+      user_time,
+    );
+
+    const userWorkingMinutes = calculateWorkingTime(checkInTime, checkOutTime);
+
+    // Limits
+    const halfDayMinutes = timeToMinutes(half_day_hours);
+    const shortLeaveMinutes = timeToMinutes(short_leave_hours);
+
+    // ---------- WORK STATUS ----------
+    let work_status;
+
+    if (userWorkingMinutes >= realWorkingMinutes) {
+      work_status = "full_day";
+    } else if (userWorkingMinutes >= shortLeaveMinutes) {
+      work_status = "short_leave";
+    } else if (userWorkingMinutes >= halfDayMinutes) {
+      work_status = "half_day";
+    } else {
+      work_status = "absent";
     }
 
-    //  9. Update Attendance
+    console.log(
+      "Working Status:",
+      work_status,
+      "Previous Status:",
+      previousStatus,
+      "User Working Minutes:",
+      userWorkingMinutes,
+    );
+
+    // FINAL STATUS (late + full_day etc.)
+    const finalStatus = `${previousStatus}_${work_status}`;
+
+    // DATETIME for DB: ISO string (e.g. 2026-05-01T04:51:00.000Z) → YYYY-MM-DD HH:mm:ss (UTC)
+    const checkOutDateTime = String(user_time).includes("T")
+      ? checkoutParsed.toISOString().slice(0, 19).replace("T", " ")
+      : `${user_date} ${user_time}`;
+
+    // ---------- UPDATE ----------
     await connection.query(
-      `UPDATE apt_attendances 
-       SET check_out = ?, attendance_status = ?
-       WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
-      [user_time, finalStatus, user_id, org_id, user_date]
+      `UPDATE attendance 
+       SET attendance_status = ?, check_out = ?, working_time = ? 
+       WHERE id = ?`,
+      [finalStatus, checkOutDateTime, userWorkingMinutes, existing.id],
     );
 
     await connection.commit();
@@ -307,9 +350,8 @@ export const markCheckOutAttendanceController = async (req, res) => {
     return res.status(200).json({
       message: "Check-out marked successfully",
       finalStatus,
-      workedMinutes
+      workingMinutes: userWorkingMinutes,
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error:", error);
@@ -339,7 +381,6 @@ export function convertToMinutes(timeStr) {
   return parseInt(hours) * 60 + parseInt(minutes);
 }
 
-
 // Create company work shifts *This controller only used by admin and hr ::
 export const createCompanyWorkShiftsController = async (req, res) => {
   let connection;
@@ -368,7 +409,7 @@ export const createCompanyWorkShiftsController = async (req, res) => {
       is_night_shift,
       working_days,
     } = req.body;
-
+    console.log(req.body);
     // 3. Validate Required Fields
     if (
       !org_id ||
@@ -390,7 +431,7 @@ export const createCompanyWorkShiftsController = async (req, res) => {
     // 4. Check Org Exists
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -401,13 +442,27 @@ export const createCompanyWorkShiftsController = async (req, res) => {
     // 5. Check User Member of Org
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user.user_id, org_id]
+      [user.user_id, org_id],
     );
 
     if (member.length === 0) {
       await connection.rollback();
       return res.status(403).json({
         message: "User not part of this organization",
+      });
+    }
+
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const shift_created_by_name = userName[0].user_name;
+
+    if (!shift_created_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
       });
     }
 
@@ -439,12 +494,12 @@ export const createCompanyWorkShiftsController = async (req, res) => {
       short_leave_hours,
       is_night_shift || false,
       user.user_id,
-      user.user_name,
+      shift_created_by_name,
       working_days || "MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY",
     ]);
 
     await connection.query(
-      `INSERT INTO management_activity_log 
+      `INSERT INTO management_activity_log
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
       [
@@ -452,8 +507,8 @@ export const createCompanyWorkShiftsController = async (req, res) => {
         "ADD_SHIFT",
         `Work shift '${shift_name}' added (${start_time} to ${end_time})`,
         user.user_id,
-        user.user_name,
-      ]
+        shift_created_by_name,
+      ],
     );
 
     await connection.commit();
@@ -461,7 +516,6 @@ export const createCompanyWorkShiftsController = async (req, res) => {
     return res.status(201).json({
       message: "Shift created successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error:", error);
@@ -469,6 +523,354 @@ export const createCompanyWorkShiftsController = async (req, res) => {
     return res.status(500).json({
       message: "Internal server error",
     });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Get All Shifts Controller
+export const getAllShiftsController = async (req, res) => {
+  try {
+    const user = req.user;
+    const org_id = req.query?.org_id ?? req.body?.org_id;
+
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    if (!org_id) {
+      return res.status(400).json({ message: "org_id is required" });
+    }
+
+    // 1. Check Org Exists
+    const [org] = await db
+      .promise()
+      .query("SELECT id FROM apt_organizations WHERE id = ?", [org_id]);
+
+    if (org.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    // 2. Check Is User Valid Member of Org
+    const [member] = await db
+      .promise()
+      .query(
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        [user.user_id, org_id],
+      );
+
+    if (member.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
+    }
+
+    // 3. Get All Shifts
+    const [shifts] = await db.promise().query(
+      `SELECT 
+        id,
+        org_id,
+        shift_name,
+        start_time,
+        end_time,
+        late_after,
+        half_day_hours,
+        short_leave_hours,
+        is_night_shift,
+        shift_created_by,
+        shift_creator_name,
+        working_days
+      
+      FROM shifts
+      WHERE org_id = ?
+      `,
+      [org_id],
+    );
+
+    return res.status(200).json({
+      message: "Shifts fetched successfully",
+      data: shifts,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+// Update company shift *Used by admin and hr only
+export const updateCompanyShiftController = async (req, res) => {
+  let connection;
+
+  try {
+    const user = req.user;
+
+    // 1. Check User
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    // 2. Check Role (admin / hr only)
+    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const {
+      org_id,
+      shift_id,
+      shift_name,
+      start_time,
+      end_time,
+      late_after,
+      half_day_hours,
+      short_leave_hours,
+      is_night_shift,
+      working_days,
+    } = req.body;
+
+    // 3. Validate required fields
+    if (
+      !org_id ||
+      !shift_id ||
+      !shift_name ||
+      !start_time ||
+      !end_time ||
+      !late_after ||
+      !half_day_hours ||
+      !short_leave_hours
+    ) {
+      return res.status(400).json({
+        message:
+          "org_id, shift_id, shift_name, start_time, end_time, late_after, half_day_hours and short_leave_hours are required",
+      });
+    }
+
+    connection = await db.promise().getConnection();
+    await connection.beginTransaction();
+
+    // 4. Check Org Exists
+    const [org] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+
+    if (org.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    // 5. Check User Member of Org
+    const [member] = await connection.query(
+      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user.user_id, org_id],
+    );
+
+    if (member.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        message: "User not part of this organization",
+      });
+    }
+
+    // Get performer name for activity log
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const performed_by_name = userName[0]?.user_name;
+
+    if (!performed_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
+    // 6. Check Shift exists and belongs to this org
+    const [existingShift] = await connection.query(
+      "SELECT id, shift_name FROM shifts WHERE id = ? AND org_id = ?",
+      [shift_id, org_id],
+    );
+
+    if (existingShift.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Shift not found in this organization",
+      });
+    }
+
+    const previousName = existingShift[0].shift_name;
+
+    // 7. Update Shift
+    await connection.query(
+      `UPDATE shifts SET
+        shift_name = ?,
+        start_time = ?,
+        end_time = ?,
+        late_after = ?,
+        half_day_hours = ?,
+        short_leave_hours = ?,
+        is_night_shift = ?,
+        working_days = ?
+      WHERE id = ? AND org_id = ?`,
+      [
+        shift_name,
+        start_time,
+        end_time,
+        late_after,
+        half_day_hours,
+        short_leave_hours,
+        is_night_shift || false,
+        working_days || "MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY",
+        shift_id,
+        org_id,
+      ],
+    );
+
+    // 8. Management activity log (insert new row — same pattern as create)
+    await connection.query(
+      `INSERT INTO management_activity_log 
+      (org_id, activity_type, activity_overview, performed_by, performed_by_name)
+      VALUES (?, ?, ?, ?, ?)`,
+      [
+        org_id,
+        "UPDATE_SHIFT",
+        `Work shift updated from '${previousName}' to '${shift_name}' (${start_time} to ${end_time})`,
+        user.user_id,
+        performed_by_name,
+      ],
+    );
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "Shift updated successfully",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error:", error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Delete company shift *Used by admin and hr only
+export const deleteCompanyShiftController = async (req, res) => {
+  let connection;
+
+  try {
+    const user = req.user;
+
+    // 1. Check User
+    if (!user) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    // 2. Check Role (admin / hr only)
+    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const { org_id, shift_id } = req.body;
+
+    // 3. Validate required fields
+    if (!org_id || !shift_id) {
+      return res
+        .status(400)
+        .json({ message: "org_id and shift_id are required" });
+    }
+
+    connection = await db.promise().getConnection();
+    await connection.beginTransaction();
+
+    // 4. Check Org Exists
+    const [org] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+
+    if (org.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    // 5. Check User Member of Org
+    const [member] = await connection.query(
+      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user.user_id, org_id],
+    );
+
+    if (member.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        message: "User not part of this organization",
+      });
+    }
+
+    // Get performer name for activity log
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const performed_by_name = userName[0]?.user_name;
+
+    if (!performed_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
+    // 6. Check Shift exists and belongs to this org
+    const [existingShift] = await connection.query(
+      "SELECT id, shift_name FROM shifts WHERE id = ? AND org_id = ?",
+      [shift_id, org_id],
+    );
+
+    if (existingShift.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Shift not found in this organization",
+      });
+    }
+
+    const shiftName = existingShift[0].shift_name;
+
+    // 7. Management activity log (before delete so overview still describes the shift)
+    await connection.query(
+      `INSERT INTO management_activity_log 
+      (org_id, activity_type, activity_overview, performed_by, performed_by_name)
+      VALUES (?, ?, ?, ?, ?)`,
+      [
+        org_id,
+        "DELETE_SHIFT",
+        `Work shift '${shiftName}' (id: ${shift_id}) deleted`,
+        user.user_id,
+        performed_by_name,
+      ],
+    );
+
+    // 8. Delete Shift (user_shifts rows cascade per schema)
+    await connection.query("DELETE FROM shifts WHERE id = ? AND org_id = ?", [
+      shift_id,
+      org_id,
+    ]);
+
+    await connection.commit();
+
+    return res.status(200).json({ message: "Shift deleted successfully" });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error:", error);
+
+    return res.status(500).json({ message: "Internal server error" });
   } finally {
     if (connection) connection.release();
   }
@@ -484,8 +886,7 @@ export const userAssignShiftController = async (req, res) => {
     // 1. Check User & Role
     if (
       !user ||
-      (user.user_role_name !== "admin" &&
-        user.user_role_name !== "hr")
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -502,10 +903,23 @@ export const userAssignShiftController = async (req, res) => {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
+    // Get assigner display name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const user_assigned_by_name = userName[0]?.user_name;
+    if (!user_assigned_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
     // 3. Check Org Exists
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -518,7 +932,7 @@ export const userAssignShiftController = async (req, res) => {
     // 4. Check Target User is member of Org
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
 
     if (member.length === 0) {
@@ -531,7 +945,7 @@ export const userAssignShiftController = async (req, res) => {
     // 5. Check Shift Exists & belongs to same org
     const [shift] = await connection.query(
       "SELECT id, shift_name FROM shifts WHERE id = ? AND org_id = ?",
-      [shift_id, org_id]
+      [shift_id, org_id],
     );
 
     if (shift.length === 0) {
@@ -545,7 +959,7 @@ export const userAssignShiftController = async (req, res) => {
 
     const [assigneeRow] = await connection.query(
       "SELECT user_name FROM apt_users WHERE id = ?",
-      [user_id]
+      [user_id],
     );
     const assignee_name =
       assigneeRow.length > 0 ? assigneeRow[0].user_name : `User ${user_id}`;
@@ -553,7 +967,7 @@ export const userAssignShiftController = async (req, res) => {
     // 6. Check Already Assigned (prevent duplicate)
     const [existing] = await connection.query(
       "SELECT id FROM user_shifts WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
 
     if (existing.length > 0) {
@@ -562,13 +976,7 @@ export const userAssignShiftController = async (req, res) => {
         `UPDATE user_shifts 
          SET shift_id = ?, user_assigned_by = ?, assigned_by_name = ?
          WHERE user_id = ? AND org_id = ?`,
-        [
-          shift_id,
-          user.user_id,
-          user.user_name,
-          user_id,
-          org_id,
-        ]
+        [shift_id, user.user_id, user_assigned_by_name, user_id, org_id],
       );
     } else {
       // first time assign
@@ -576,13 +984,7 @@ export const userAssignShiftController = async (req, res) => {
         `INSERT INTO user_shifts 
         (user_id, shift_id, org_id, user_assigned_by, assigned_by_name)
         VALUES (?, ?, ?, ?, ?)`,
-        [
-          user_id,
-          shift_id,
-          org_id,
-          user.user_id,
-          user.user_name,
-        ]
+        [user_id, shift_id, org_id, user.user_id, user_assigned_by_name],
       );
     }
 
@@ -600,8 +1002,8 @@ export const userAssignShiftController = async (req, res) => {
         "ASSIGN_SHIFT",
         assignOverview,
         user.user_id,
-        user.user_name,
-      ]
+        user_assigned_by_name,
+      ],
     );
 
     await connection.commit();
@@ -609,7 +1011,6 @@ export const userAssignShiftController = async (req, res) => {
     return res.status(200).json({
       message: "Shift assigned successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -622,7 +1023,7 @@ export const userAssignShiftController = async (req, res) => {
   }
 };
 
-// Company IP Address 
+// Company IP Address
 export const addCompanyIPAddressController = async (req, res) => {
   let connection;
 
@@ -632,8 +1033,7 @@ export const addCompanyIPAddressController = async (req, res) => {
     // 1. Check User & Role (admin / hr only)
     if (
       !user ||
-      (user.user_role_name !== "admin" &&
-        user.user_role_name !== "hr")
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -653,7 +1053,7 @@ export const addCompanyIPAddressController = async (req, res) => {
     // 3. Check Org Exists
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -666,7 +1066,7 @@ export const addCompanyIPAddressController = async (req, res) => {
     // 4. Check User is member of org
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user.user_id, org_id]
+      [user.user_id, org_id],
     );
 
     if (member.length === 0) {
@@ -676,10 +1076,17 @@ export const addCompanyIPAddressController = async (req, res) => {
       });
     }
 
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const ip_added_by_name = userName[0].user_name;
+
     // 5. Check duplicate IP (IMPORTANT)
     const [existingIp] = await connection.query(
       "SELECT id FROM organization_ips WHERE org_id = ? AND ip_address = ?",
-      [org_id, ip_address]
+      [org_id, ip_address],
     );
 
     if (existingIp.length > 0) {
@@ -705,7 +1112,7 @@ export const addCompanyIPAddressController = async (req, res) => {
       org_id,
       ip_address,
       user.user_id,
-      user.user_name,
+      ip_added_by_name,
       label || null,
     ]);
 
@@ -718,8 +1125,8 @@ export const addCompanyIPAddressController = async (req, res) => {
         "ADD_IP",
         `IP ${ip_address} (${label || "No Label"}) added`,
         user.user_id,
-        user.user_name,
-      ]
+        ip_added_by_name,
+      ],
     );
 
     await connection.commit();
@@ -730,9 +1137,9 @@ export const addCompanyIPAddressController = async (req, res) => {
         org_id,
         ip_address,
         label: label || null,
+        ip_added_by_name,
       },
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -756,8 +1163,7 @@ export const updateCompanyIPLabelController = async (req, res) => {
     // 1. Check User & Role
     if (
       !user ||
-      (user.user_role_name !== "admin" &&
-        user.user_role_name !== "hr")
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -777,7 +1183,7 @@ export const updateCompanyIPLabelController = async (req, res) => {
     // 3. Check Org Exists
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -788,7 +1194,7 @@ export const updateCompanyIPLabelController = async (req, res) => {
     // 4. Check Membership
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user.user_id, org_id]
+      [user.user_id, org_id],
     );
 
     if (member.length === 0) {
@@ -801,7 +1207,7 @@ export const updateCompanyIPLabelController = async (req, res) => {
     //  5. Fetch existing IP details (IMPORTANT)
     const [ip] = await connection.query(
       "SELECT ip_address, label FROM organization_ips WHERE id = ? AND org_id = ?",
-      [ip_id, org_id]
+      [ip_id, org_id],
     );
 
     if (ip.length === 0) {
@@ -817,7 +1223,7 @@ export const updateCompanyIPLabelController = async (req, res) => {
     // 6. Update Label
     await connection.query(
       "UPDATE organization_ips SET label = ? WHERE id = ? AND org_id = ?",
-      [label, ip_id, org_id]
+      [label, ip_id, org_id],
     );
 
     //  7. Activity Log (before → after)
@@ -830,8 +1236,8 @@ export const updateCompanyIPLabelController = async (req, res) => {
         "UPDATE_IP_LABEL",
         `IP ${ip_address} label changed from '${old_label || "No Label"}' to '${label}'`,
         user.user_id,
-        user.user_name
-      ]
+        user.user_name,
+      ],
     );
 
     await connection.commit();
@@ -843,7 +1249,6 @@ export const updateCompanyIPLabelController = async (req, res) => {
         label,
       },
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -866,8 +1271,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     // 1. Check User & Role
     if (
       !user ||
-      (user.user_role_name !== "admin" &&
-        user.user_role_name !== "hr")
+      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
     ) {
       return res.status(403).json({ message: "Forbidden" });
     }
@@ -887,7 +1291,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     // 3. Check Org Exists
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -898,7 +1302,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     // 4. Check Membership
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user.user_id, org_id]
+      [user.user_id, org_id],
     );
 
     if (member.length === 0) {
@@ -911,7 +1315,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     //  IMPORTANT: IP details fetch karo BEFORE delete
     const [ip] = await connection.query(
       "SELECT ip_address, label FROM organization_ips WHERE id = ? AND org_id = ?",
-      [ip_id, org_id]
+      [ip_id, org_id],
     );
 
     if (ip.length === 0) {
@@ -926,7 +1330,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     // 6. Delete IP
     await connection.query(
       "DELETE FROM organization_ips WHERE id = ? AND org_id = ?",
-      [ip_id, org_id]
+      [ip_id, org_id],
     );
 
     //  7. Activity Log Insert
@@ -939,8 +1343,8 @@ export const deleteCompanyIPAddressController = async (req, res) => {
         "DELETE_IP",
         `IP ${ip_address} (${label || "No Label"}) deleted`,
         user.user_id,
-        user.user_name
-      ]
+        user.user_name,
+      ],
     );
 
     await connection.commit();
@@ -948,7 +1352,6 @@ export const deleteCompanyIPAddressController = async (req, res) => {
     return res.status(200).json({
       message: "IP deleted successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -961,10 +1364,65 @@ export const deleteCompanyIPAddressController = async (req, res) => {
   }
 };
 
+// Get All IP Addresses Controller
+export const getAllIPAddressesController = async (req, res) => {
+  try {
+    const user = req.user;
+    const org_id = req.query?.org_id ?? req.body?.org_id;
+
+    if (!user?.user_id || !org_id) {
+      return res
+        .status(400)
+        .json({ message: "user_id and org_id are required" });
+    }
+
+    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+    // 1. Check Organization Exists
+    const [org] = await db
+      .promise()
+      .query("SELECT id FROM apt_organizations WHERE id = ?", [org_id]);
+    if (org.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    // 2. Check Is User Valid Member Of Organization
+    const [member] = await db
+      .promise()
+      .query(
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        [user.user_id, org_id],
+      );
+    if (member.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
+    }
+
+    // 3. Get All IP Addresses
+    const [ipAddresses] = await db
+      .promise()
+      .query(
+        "SELECT id, ip_address, label, created_at, ip_added_by_name FROM organization_ips WHERE org_id = ? ORDER BY created_at DESC",
+        [org_id],
+      );
+    // 4. Return IP Addresses (empty list is valid)
+    return res.status(200).json({
+      message: "IP Addresses fetched successfully",
+      data: ipAddresses,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 // Add Holiday Controller
 export const addHolidayController = async (req, res) => {
   const { org_id, holiday_name, holiday_date } = req.body;
-  const { user_id, user_role_name, user_name } = req.user;
+  const { user_id, user_role_name } = req.user;
+  let connection;
 
   if (!user_id || !org_id || !holiday_name || !holiday_date) {
     return res.status(400).json({ message: "All fields are required" });
@@ -974,16 +1432,27 @@ export const addHolidayController = async (req, res) => {
     return res.status(403).json({ message: "Forbidden" });
   }
 
-  let connection;
-
   try {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    const holiday_created_by_name = userName[0]?.user_name;
+    if (!holiday_created_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
     // 1. Check Org
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
 
     if (org.length === 0) {
@@ -991,10 +1460,10 @@ export const addHolidayController = async (req, res) => {
       return res.status(404).json({ message: "Organization not found" });
     }
 
-    // 2. Check Duplicate Holiday (UNIQUE already hai but safe check)
+    // 2. Check Duplicate Holiday
     const [existing] = await connection.query(
       "SELECT id FROM holidays WHERE org_id = ? AND holiday_date = ?",
-      [org_id, holiday_date]
+      [org_id, holiday_date],
     );
 
     if (existing.length > 0) {
@@ -1007,7 +1476,7 @@ export const addHolidayController = async (req, res) => {
       `INSERT INTO holidays 
       (org_id, holiday_name, holiday_date, holiday_created_by_id, holiday_created_by_name)
       VALUES (?, ?, ?, ?, ?)`,
-      [org_id, holiday_name, holiday_date, user_id, user_name]
+      [org_id, holiday_name, holiday_date, user_id, holiday_created_by_name],
     );
 
     // 4. Activity Log
@@ -1020,16 +1489,15 @@ export const addHolidayController = async (req, res) => {
         "ADD_HOLIDAY",
         `Holiday '${holiday_name}' added for date ${holiday_date}`,
         user_id,
-        user_name
-      ]
+        holiday_created_by_name,
+      ],
     );
 
     await connection.commit();
 
     return res.status(200).json({
-      message: "Holiday added successfully"
+      message: "Holiday added successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -1042,7 +1510,8 @@ export const addHolidayController = async (req, res) => {
 // Update Holiday Controller
 export const updateHolidayController = async (req, res) => {
   const { holiday_id, holiday_name, holiday_date } = req.body;
-  const { user_id, user_role_name, user_name } = req.user;
+  const { user_id, user_role_name } = req.user;
+  let connection;
 
   if (!holiday_id || !holiday_name || !holiday_date) {
     return res.status(400).json({ message: "All fields are required" });
@@ -1052,16 +1521,28 @@ export const updateHolidayController = async (req, res) => {
     return res.status(403).json({ message: "Forbidden" });
   }
 
-  let connection;
-
   try {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    const holiday_updated_by_name = userName[0]?.user_name;
+
+    if (!holiday_updated_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
     // 1. Check Holiday Exists
     const [holiday] = await connection.query(
       "SELECT * FROM holidays WHERE id = ?",
-      [holiday_id]
+      [holiday_id],
     );
 
     if (holiday.length === 0) {
@@ -1074,7 +1555,7 @@ export const updateHolidayController = async (req, res) => {
     // 2. Update Holiday
     await connection.query(
       "UPDATE holidays SET holiday_name = ?, holiday_date = ? WHERE id = ?",
-      [holiday_name, holiday_date, holiday_id]
+      [holiday_name, holiday_date, holiday_id],
     );
 
     // 3. Activity Log
@@ -1087,16 +1568,15 @@ export const updateHolidayController = async (req, res) => {
         "UPDATE_HOLIDAY",
         `Holiday updated to '${holiday_name}' on ${holiday_date}`,
         user_id,
-        user_name
-      ]
+        holiday_updated_by_name,
+      ],
     );
 
     await connection.commit();
 
     return res.status(200).json({
-      message: "Holiday updated successfully"
+      message: "Holiday updated successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -1109,7 +1589,8 @@ export const updateHolidayController = async (req, res) => {
 // Delete Holiday Controller
 export const deleteHolidayController = async (req, res) => {
   const { holiday_id } = req.body;
-  const { user_id, user_role_name, user_name } = req.user;
+  const { user_id, user_role_name } = req.user;
+  let connection;
 
   if (!holiday_id) {
     return res.status(400).json({ message: "Holiday ID is required" });
@@ -1119,16 +1600,28 @@ export const deleteHolidayController = async (req, res) => {
     return res.status(403).json({ message: "Forbidden" });
   }
 
-  let connection;
-
   try {
     connection = await db.promise().getConnection();
     await connection.beginTransaction();
 
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    const holiday_deleted_by_name = userName[0]?.user_name;
+
+    if (!holiday_deleted_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
     // 1. Get Holiday
     const [holiday] = await connection.query(
       "SELECT * FROM holidays WHERE id = ?",
-      [holiday_id]
+      [holiday_id],
     );
 
     if (holiday.length === 0) {
@@ -1139,10 +1632,7 @@ export const deleteHolidayController = async (req, res) => {
     const { org_id, holiday_name, holiday_date } = holiday[0];
 
     // 2. Delete Holiday
-    await connection.query(
-      "DELETE FROM holidays WHERE id = ?",
-      [holiday_id]
-    );
+    await connection.query("DELETE FROM holidays WHERE id = ?", [holiday_id]);
 
     // 3. Activity Log
     await connection.query(
@@ -1154,16 +1644,15 @@ export const deleteHolidayController = async (req, res) => {
         "DELETE_HOLIDAY",
         `Holiday '${holiday_name}' on ${holiday_date} deleted`,
         user_id,
-        user_name
-      ]
+        holiday_deleted_by_name,
+      ],
     );
 
     await connection.commit();
 
     return res.status(200).json({
-      message: "Holiday deleted successfully"
+      message: "Holiday deleted successfully",
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -1173,6 +1662,72 @@ export const deleteHolidayController = async (req, res) => {
   }
 };
 
+// Get All Holidays Controller
+export const getAllHolidaysController = async (req, res) => {
+  try {
+    const user = req.user;
+    const org_id = req.query?.org_id ?? req.body?.org_id;
+
+    if (!user?.user_id || !org_id) {
+      return res
+        .status(400)
+        .json({ message: "user_id and org_id are required" });
+    }
+
+    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // 1. Check Org Exists
+    const [org] = await db
+      .promise()
+      .query("SELECT id FROM apt_organizations WHERE id = ?", [org_id]);
+
+    if (org.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    // 2. Check Is User Valid Member of Org
+    const [member] = await db
+      .promise()
+      .query(
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        [user.user_id, org_id],
+      );
+
+    if (member.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
+    }
+
+    // 3. Get All Holidays
+    const [holidays] = await db.promise().query(
+      `SELECT
+        id,
+        org_id,
+        holiday_name,
+        holiday_date,
+        holiday_created_by_id,
+        holiday_created_by_name,
+        created_at,
+        updated_at
+      FROM holidays
+      WHERE org_id = ?
+      ORDER BY holiday_date ASC`,
+      [org_id],
+    );
+
+    // 4. Return Holidays
+    return res.status(200).json({
+      message: "Holidays fetched successfully",
+      data: holidays,
+    });
+  } catch (error) {
+    console.error(error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
 
 const LEAVE_TYPES = ["full_day", "half_day", "short_leave"];
 
@@ -1263,12 +1818,12 @@ function clampPaidLeaveNumbers(totalNum, usedNum) {
 
 // Leave Query Controller *Uses By Employees ::
 export const leaveQueryController = async (req, res) => {
-  const { user_id, user_name, user_email } = req.user;
+  const { user_id, user_email } = req.user;
   const { org_id, leave_type, start_date, end_date, reason } = req.body;
 
-  if (!user_id || !user_name || !user_email) {
+  if (!user_id || !user_email) {
     return res.status(400).json({
-      message: "User ID, name and email are required",
+      message: "User ID and email are required",
     });
   }
 
@@ -1286,12 +1841,16 @@ export const leaveQueryController = async (req, res) => {
 
   const startNorm = parseDateOnly(start_date);
   if (!startNorm) {
-    return res.status(400).json({ message: "Invalid start_date (use YYYY-MM-DD)" });
+    return res
+      .status(400)
+      .json({ message: "Invalid start_date (use YYYY-MM-DD)" });
   }
 
   let endNorm = parseDateOnly(end_date);
   if (end_date != null && end_date !== "" && !endNorm) {
-    return res.status(400).json({ message: "Invalid end_date (use YYYY-MM-DD)" });
+    return res
+      .status(400)
+      .json({ message: "Invalid end_date (use YYYY-MM-DD)" });
   }
 
   if (endNorm && endNorm < startNorm) {
@@ -1321,9 +1880,20 @@ export const leaveQueryController = async (req, res) => {
     );
     if (member.length === 0) {
       await connection.rollback();
-      return res.status(403).json({ message: "User not part of this organization" });
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
     }
 
+    const [user] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    if (user.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User not found" });
+    }
+    const user_name = user[0].user_name;
     const [insertResult] = await connection.query(
       `INSERT INTO leave_quiry (
         user_id, user_name, user_email, org_id,
@@ -1359,7 +1929,8 @@ export const leaveQueryController = async (req, res) => {
 // Update Leave Query Controller *Uses By Employees ::
 export const updateLeaveQueryController = async (req, res) => {
   const { user_id } = req.user;
-  const { leave_id, org_id, leave_type, start_date, end_date, reason } = req.body;
+  const { leave_id, org_id, leave_type, start_date, end_date, reason } =
+    req.body;
 
   if (!user_id || !leave_id || !org_id) {
     return res.status(400).json({
@@ -1381,7 +1952,9 @@ export const updateLeaveQueryController = async (req, res) => {
   if (start_date !== undefined && start_date !== null && start_date !== "") {
     startNorm = parseDateOnly(start_date);
     if (!startNorm) {
-      return res.status(400).json({ message: "Invalid start_date (use YYYY-MM-DD)" });
+      return res
+        .status(400)
+        .json({ message: "Invalid start_date (use YYYY-MM-DD)" });
     }
   }
 
@@ -1392,7 +1965,9 @@ export const updateLeaveQueryController = async (req, res) => {
     } else {
       endNorm = parseDateOnly(end_date);
       if (!endNorm) {
-        return res.status(400).json({ message: "Invalid end_date (use YYYY-MM-DD)" });
+        return res
+          .status(400)
+          .json({ message: "Invalid end_date (use YYYY-MM-DD)" });
       }
     }
   }
@@ -1418,7 +1993,9 @@ export const updateLeaveQueryController = async (req, res) => {
     );
     if (member.length === 0) {
       await connection.rollback();
-      return res.status(403).json({ message: "User not part of this organization" });
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
     }
 
     const [rows] = await connection.query(
@@ -1491,7 +2068,9 @@ export const updateLeaveQueryController = async (req, res) => {
 
     await connection.commit();
 
-    return res.status(200).json({ message: "Leave request updated successfully" });
+    return res
+      .status(200)
+      .json({ message: "Leave request updated successfully" });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -1533,7 +2112,9 @@ export const deleteLeaveQueryController = async (req, res) => {
     );
     if (member.length === 0) {
       await connection.rollback();
-      return res.status(403).json({ message: "User not part of this organization" });
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
     }
 
     const [del] = await connection.query(
@@ -1551,7 +2132,9 @@ export const deleteLeaveQueryController = async (req, res) => {
 
     await connection.commit();
 
-    return res.status(200).json({ message: "Leave request deleted successfully" });
+    return res
+      .status(200)
+      .json({ message: "Leave request deleted successfully" });
   } catch (error) {
     if (connection) await connection.rollback();
     console.error(error);
@@ -1680,6 +2263,19 @@ export const leaveResponseController = async (req, res) => {
       }
     }
 
+    // Get User Name
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    const leave_approved_by_name = userName[0].user_name;
+    if (!leave_approved_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
     const [updResult] = await connection.query(
       `UPDATE leave_quiry
        SET status = ?, approved_by = ?
@@ -1694,7 +2290,11 @@ export const leaveResponseController = async (req, res) => {
       });
     }
 
-    if (responseStatus === "approved" && deductionBuckets.length > 0 && empUserId != null) {
+    if (
+      responseStatus === "approved" &&
+      deductionBuckets.length > 0 &&
+      empUserId != null
+    ) {
       for (const { year, month, units } of deductionBuckets) {
         const [balRows] = await connection.query(
           `SELECT id, total_leaves, used_leaves FROM leave_balance
@@ -1705,7 +2305,10 @@ export const leaveResponseController = async (req, res) => {
 
         const b = balRows[0];
         const newUsed = Number(b.used_leaves) + units;
-        const newRem = clampPaidLeaveNumbers(Number(b.total_leaves), newUsed).remaining;
+        const newRem = clampPaidLeaveNumbers(
+          Number(b.total_leaves),
+          newUsed,
+        ).remaining;
 
         await connection.query(
           `UPDATE leave_balance
@@ -1725,7 +2328,7 @@ export const leaveResponseController = async (req, res) => {
       `INSERT INTO management_activity_log 
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
-      [org_id, activityType, overview, user.user_id, user.user_name],
+      [org_id, activityType, overview, user.user_id, leave_approved_by_name],
     );
 
     await connection.commit();
@@ -1746,7 +2349,6 @@ export const leaveResponseController = async (req, res) => {
   }
 };
 
-
 // Assign Paid Leaves Controller *Uses By Admin and HR  ::
 /** Sets monthly allotment (existing row upserts total_leaves / remaining with same month’s used unchanged). */
 export const assignPaidLeavesController = async (req, res) => {
@@ -1762,8 +2364,13 @@ export const assignPaidLeavesController = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const { org_id, user_id: target_user_id, year, month, total_leaves } =
-      req.body;
+    const {
+      org_id,
+      user_id: target_user_id,
+      year,
+      month,
+      total_leaves,
+    } = req.body;
 
     if (
       org_id == null ||
@@ -1790,7 +2397,8 @@ export const assignPaidLeavesController = async (req, res) => {
       totalNum < 0
     ) {
       return res.status(400).json({
-        message: "year, month (1–12) and non-negative total_leaves are required",
+        message:
+          "year, month (1–12) and non-negative total_leaves are required",
       });
     }
 
@@ -1833,7 +2441,9 @@ export const assignPaidLeavesController = async (req, res) => {
       [target_user_id],
     );
     const assignee_name =
-      assigneeRow.length > 0 ? assigneeRow[0].user_name : `User ${target_user_id}`;
+      assigneeRow.length > 0
+        ? assigneeRow[0].user_name
+        : `User ${target_user_id}`;
 
     const [existing] = await connection.query(
       `SELECT id, used_leaves FROM leave_balance
@@ -1847,10 +2457,11 @@ export const assignPaidLeavesController = async (req, res) => {
       used = Number(existing[0].used_leaves) || 0;
     }
 
-    const { total, used: uFinal, remaining } = clampPaidLeaveNumbers(
-      totalNum,
-      used,
-    );
+    const {
+      total,
+      used: uFinal,
+      remaining,
+    } = clampPaidLeaveNumbers(totalNum, used);
 
     if (existing.length > 0) {
       await connection.query(
@@ -1878,13 +2489,7 @@ export const assignPaidLeavesController = async (req, res) => {
       `INSERT INTO management_activity_log 
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
-      [
-        org_id,
-        "ASSIGN_PAID_LEAVES",
-        overview,
-        user.user_id,
-        user.user_name,
-      ],
+      [org_id, "ASSIGN_PAID_LEAVES", overview, user.user_id, user.user_name],
     );
 
     await connection.commit();
@@ -2007,10 +2612,11 @@ export const updatePaidLeavesController = async (req, res) => {
       nextUsed = u;
     }
 
-    const { total, used: uF, remaining } = clampPaidLeaveNumbers(
-      nextTotal,
-      nextUsed,
-    );
+    const {
+      total,
+      used: uF,
+      remaining,
+    } = clampPaidLeaveNumbers(nextTotal, nextUsed);
 
     await connection.query(
       `UPDATE leave_balance
@@ -2027,13 +2633,7 @@ export const updatePaidLeavesController = async (req, res) => {
       `INSERT INTO management_activity_log 
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
-      [
-        org_id,
-        "UPDATE_PAID_LEAVES",
-        overview,
-        user.user_id,
-        user.user_name,
-      ],
+      [org_id, "UPDATE_PAID_LEAVES", overview, user.user_id, user.user_name],
     );
 
     await connection.commit();
@@ -2059,7 +2659,6 @@ export const updatePaidLeavesController = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 // Delete Paid Leaves Controller *Uses By Admin and HR ::
 export const deletePaidLeavesController = async (req, res) => {
   let connection;
@@ -2154,3 +2753,43 @@ export const deletePaidLeavesController = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+function toSeconds(t) {
+  const [h, m, s] = t.split(":").map(Number);
+  return h * 3600 + m * 60 + s;
+}
+
+function calculateWorkingTime(start, end) {
+  const toSeconds = (t) => {
+    const [h, m, s] = t.split(":").map(Number);
+    return h * 3600 + m * 60 + s;
+  };
+
+  const toTime = (sec) => {
+    let h = Math.floor(sec / 3600);
+    let m = Math.floor((sec % 3600) / 60);
+    let s = sec % 60;
+
+    return `${h.toString().padStart(2, "0")}:${m
+      .toString()
+      .padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const diffSeconds = toSeconds(end) - toSeconds(start);
+
+  if (diffSeconds < 0) {
+    throw new Error("End time must be greater than start time");
+  }
+
+  return {
+    seconds: diffSeconds,
+    minutes: diffSeconds / 60,
+    time: toTime(diffSeconds),
+  };
+}
+
+function timeToMinutes(time) {
+  const [hours, minutes, seconds] = time.split(":").map(Number);
+
+  return hours * 60 + minutes + seconds / 60;
+}

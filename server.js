@@ -6,6 +6,9 @@ import authRoutes from "./routes/admin.auth.routes.js";
 import userRoutes from "./routes/admin.controlled.routes.js"; 
 import userRolesRoutes from "./routes/user.roles.route.js";
 import registrationRoutes from "./routes/registration.routes.js";
+import attendanceRoutes from "./routes/attendance.routes.js";
+import organizationSettingsRoutes from "./routes/organization.settings.routes.js";
+import employeesRoutes from "./routes/employees.routes.js";
 dotenv.config();
 
 const app = express();
@@ -35,6 +38,12 @@ app.use("/api/user-roles", userRolesRoutes);
 
 // Attendance Routes
 app.use("/api/attendance", attendanceRoutes);
+
+// Organization Settings Routes
+app.use("/api/organization-settings", organizationSettingsRoutes);
+
+// Employees Routes
+app.use("/api/employees", employeesRoutes);
 
 
 app.listen(3000, () => {
