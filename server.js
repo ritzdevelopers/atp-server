@@ -9,6 +9,7 @@ import registrationRoutes from "./routes/registration.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
 import organizationSettingsRoutes from "./routes/organization.settings.routes.js";
 import employeesRoutes from "./routes/employees.routes.js";
+import organizationFeaturesRoutes from "./routes/organization.features.routes.js";
 dotenv.config();
 
 const app = express();
@@ -34,7 +35,8 @@ app.use("/api/user", userRoutes);
 // User Roles Routes :: It Will Be Used By Admin Only
 app.use("/api/user-roles", userRolesRoutes);
 
-
+// Feature Access Controllers Routes ::
+app.use("/api/organization-features", organizationFeaturesRoutes);
 
 // Attendance Routes
 app.use("/api/attendance", attendanceRoutes);
