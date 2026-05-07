@@ -11,6 +11,7 @@ import organizationSettingsRoutes from "./routes/organization.settings.routes.js
 import employeesRoutes from "./routes/employees.routes.js";
 import organizationFeaturesRoutes from "./routes/organization.features.routes.js";
 import superAdminRoutes from "./routes/super-admin.routes.js";
+import attendanceHistoryRoutes from "./routes/attendance.history.routes.js";
 
 dotenv.config();
 
@@ -49,6 +50,8 @@ app.use("/api/organization-settings", organizationSettingsRoutes);
 // Employees Routes
 app.use("/api/employees", employeesRoutes);
 
+// Attendance History Routes
+app.use("/api/attendance-history", attendanceHistoryRoutes);
 
 // Super Admin Handled Routes ::
 app.use("/api/super-admin", superAdminRoutes);

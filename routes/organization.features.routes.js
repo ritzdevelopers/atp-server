@@ -20,6 +20,7 @@ router.get("/get-organization-features",
     user_authorization("admin"),
     get_organization_features_controller);
 
+    // employee-feature-management
 router.get(
     "/get-all-employees-with-accessible-features",
     user_validation_middleware,
