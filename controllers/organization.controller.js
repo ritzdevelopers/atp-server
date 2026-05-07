@@ -181,8 +181,11 @@ export const create_organization_controller = async (req, res) => {
 };
 
 export const get_organization_controller = async (req, res) => {
+  // Controller Access Val -> get-organization-information
   try {
     const { user_id, user_role_id, user_role_name } = req.user;
+    const req_user = req.user;
+    console.log("req_user: ", req_user);
 
     // Fetch Organization From apt_org_members
     const fetch_organization_from_org_members_query =
@@ -317,6 +320,139 @@ export const get_organization_controller = async (req, res) => {
     return res.status(500).json({
       error: "Error getting organization",
       message: "Try Again Later",
+      success: false,
+    });
+  }
+};
+export const get_org_info_controller = async (req, res) => {
+
+  // Controller Access Val -> get-organization-information
+
+  try {
+
+    const req_user = req.user;
+    const user_features_access = req.feature_access;
+
+    // Validate Feature Access
+    if (!user_features_access || !user_features_access.status) {
+      return res.status(403).json({
+        error: "Forbidden Access",
+        message: "User Features Access Not Found",
+        success: false,
+      });
+    }
+
+    const {
+      user_id,
+      user_role_id,
+      user_email,
+      user_role_name,
+    } = req_user;
+
+    // Validate User
+    if (!user_id || !user_role_id || !user_email) {
+      return res.status(400).json({
+        error: "Invalid Credentials",
+        message: "Invalid Credentials",
+        success: false,
+      });
+    }
+
+    // Fetch Organization Info
+    const fetch_organization_info_query = `
+      SELECT 
+
+        apt_users.user_name,
+        apt_users.user_email,
+        apt_users.user_phone,
+
+        apt_org_members.org_id,
+
+        apt_organizations.org_name,
+        apt_organizations.org_email,
+        apt_organizations.org_phone,
+        apt_organizations.created_at,
+
+        apt_organizations.owner_id,
+
+        owner_user.user_name AS owner_name,
+        owner_user.user_email AS owner_email,
+        owner_user.user_phone AS owner_phone
+
+      FROM apt_users
+
+      INNER JOIN apt_org_members 
+        ON apt_users.id = apt_org_members.user_id
+
+      INNER JOIN apt_organizations 
+        ON apt_org_members.org_id = apt_organizations.id
+
+      INNER JOIN apt_users AS owner_user 
+        ON apt_organizations.owner_id = owner_user.id
+
+      WHERE apt_users.id = ?
+    `;
+
+    const [organization_info] = await db
+      .promise()
+      .query(fetch_organization_info_query, [user_id]);
+
+    // Organization Not Found
+    if (!organization_info || organization_info.length === 0) {
+      return res.status(404).json({
+        error: "Organization Not Found",
+        message: "Organization Not Found",
+        success: false,
+      });
+    }
+
+    const org = organization_info[0];
+
+    return res.status(200).json({
+      message: "Organization Info Fetched Successfully",
+      success: true,
+
+      data: {
+
+        organization: {
+          org_id: org.org_id,
+          org_name: org.org_name,
+          org_email: org.org_email,
+          org_phone: org.org_phone,
+          created_at: org.created_at,
+
+          owner_info: {
+            owner_id: org.owner_id,
+            name: org.owner_name,
+            email: org.owner_email,
+            phone: org.owner_phone,
+          },
+        },
+
+        user_info: {
+          user_id,
+          role_id: user_role_id,
+          role_name: user_role_name,
+
+          name: org.user_name,
+          email: org.user_email,
+          phone: org.user_phone,
+        },
+
+        user_features_access,
+      },
+    });
+
+  } catch (error) {
+
+    console.log(
+      "Error in get_org_info_controller:",
+      error
+    );
+
+    return res.status(500).json({
+      error: "Error in get_org_info_controller",
+      message: "Try Again Later Or Login Again",
       success: false,
     });
   }

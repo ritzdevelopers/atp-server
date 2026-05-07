@@ -10,6 +10,8 @@ import attendanceRoutes from "./routes/attendance.routes.js";
 import organizationSettingsRoutes from "./routes/organization.settings.routes.js";
 import employeesRoutes from "./routes/employees.routes.js";
 import organizationFeaturesRoutes from "./routes/organization.features.routes.js";
+import superAdminRoutes from "./routes/super-admin.routes.js";
+
 dotenv.config();
 
 const app = express();
@@ -47,6 +49,9 @@ app.use("/api/organization-settings", organizationSettingsRoutes);
 // Employees Routes
 app.use("/api/employees", employeesRoutes);
 
+
+// Super Admin Handled Routes ::
+app.use("/api/super-admin", superAdminRoutes);
 
 app.listen(3000, () => {
   db.connect();
