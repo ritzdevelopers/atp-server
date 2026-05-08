@@ -442,8 +442,7 @@ export const get_all_users_controller = async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-      console.log("user", user);
-      
+    
     const admin_id = user.user_id; 
 
     // Fetch Organization From apt_org_members

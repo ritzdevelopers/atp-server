@@ -31,7 +31,7 @@ export const create_organization_controller = async (req, res) => {
       [owner_id],
     );
     if (user.length === 0) {
-      console.log("User not found");
+      // console.log("User not found");
       return res.status(404).json({
         error: "User not found",
         message: "Register First",

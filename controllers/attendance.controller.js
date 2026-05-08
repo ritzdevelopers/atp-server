@@ -50,7 +50,7 @@ export const markAttendanceController = async (req, res) => {
 
     const allowedIps = ips.map((i) => i.ip_address);
     const userIp = getUserIP(req);
-
+    console.log("check-in userIp", userIp);
     if (userIp !== "::1" && !allowedIps.includes(userIp)) {
       await connection.rollback();
       return res.status(403).json({ message: "Unauthorized IP" });
@@ -201,8 +201,9 @@ export const markCheckOutAttendanceController = async (req, res) => {
 
     const allowedIps = ips.map((i) => i.ip_address);
     const userIp = getUserIP(req);
-
+    // console.log("userIp", userIp); 
     if (userIp !== "::1" && !allowedIps.includes(userIp)) {
+      console.log("check-out Unauthorized IP");
       await connection.rollback();
       return res.status(403).json({
         message: "Unauthorized IP. Contact Admin",
