@@ -243,7 +243,7 @@ export const assign_features_to_an_organization_controller = async (
       `
       SELECT id
       FROM apt_roles
-      WHERE role_name = 'owner'
+      WHERE role_name = 'admin'
       AND org_id = ?
       `,
       [org_id]

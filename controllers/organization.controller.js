@@ -332,7 +332,7 @@ export const get_org_info_controller = async (req, res) => {
 
     const req_user = req.user;
     const user_features_access = req.feature_access;
-
+    
     // Validate Feature Access
     if (!user_features_access || !user_features_access.status) {
       return res.status(403).json({
@@ -377,7 +377,8 @@ export const get_org_info_controller = async (req, res) => {
 
         owner_user.user_name AS owner_name,
         owner_user.user_email AS owner_email,
-        owner_user.user_phone AS owner_phone
+        owner_user.user_phone AS owner_phone,
+        owner_user.created_at AS owner_created_at
 
       FROM apt_users
 
@@ -426,6 +427,7 @@ export const get_org_info_controller = async (req, res) => {
             name: org.owner_name,
             email: org.owner_email,
             phone: org.owner_phone,
+            created_at: org.owner_created_at,
           },
         },
 
@@ -437,6 +439,7 @@ export const get_org_info_controller = async (req, res) => {
           name: org.user_name,
           email: org.user_email,
           phone: org.user_phone,
+          created_at: org.created_at,
         },
 
         user_features_access,

@@ -15,7 +15,7 @@ router.post("/login", user_login_controller); // :: Tested and Working Fine ::
 
 router.get("/get-me", user_validation_middleware, get_user_controller);
 
-router.get("/get-organization", user_validation_middleware, user_authorization("admin", "hr"), user_feature_access_checker("get-organization-information"), get_org_info_controller);
+router.get("/get-organization", user_validation_middleware, user_feature_access_checker("get-organization-info"), get_org_info_controller);
 
 router.get("/get-accessible-features", user_validation_middleware, user_feature_access_checker("get-accessible-features"), get_accessible_features_controller);
 

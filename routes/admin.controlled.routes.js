@@ -21,8 +21,7 @@ router.post(
 // Get All Users Route :: It Will Be Used By Admin Only
 router.get(
   "/get-all-users",
-  user_validation_middleware,
-  user_authorization("admin","hr"),
+  user_validation_middleware, 
   get_all_users_controller,
 );
 

@@ -442,28 +442,17 @@ export const get_all_users_controller = async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
-      return res.status(403).json({ message: "Unauthorized" });
+      console.log("user", user);
+      
+    const admin_id = user.user_id; 
+
+    // Fetch Organization From apt_org_members
+    const fetch_organization_query = "SELECT org_id FROM apt_org_members WHERE user_id = ?";
+    const [organization_result] = await db.promise().query(fetch_organization_query, [admin_id]);
+    if (organization_result.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
     }
-    const admin_id = user.user_id;
-    const user_role_name = user.user_role_name;
-
-    // Fetch Organization ID Using admin_id
-    const fetch_organization_id_query =
-      "SELECT * from apt_organizations where owner_id = ?";
-
-    db.query(fetch_organization_id_query, [admin_id], (err, result) => {
-      if (err) {
-        console.error("Error fetching organization id: ", err);
-        return res
-          .status(500)
-          .json({ message: "Error fetching organization id" });
-      }
-      if (result.length === 0) {
-        return res.status(404).json({ message: "Organization not found" });
-      }
-      const organization_id = result[0].id;
-      const org_admin_id = result[0].owner_id;
+    const organization_id = organization_result[0].org_id;
 
       // If User Role Name Is HR Then Fetch All The Users Of The Organization Except Admin & HR
       let query = `
@@ -515,7 +504,6 @@ export const get_all_users_controller = async (req, res) => {
           
         });
       });
-    });
   } catch (error) {
     console.error("Error fetching users: ", error);
     res.status(500).json({ message: "Error fetching users" });

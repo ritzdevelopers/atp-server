@@ -181,7 +181,6 @@ const user_feature_access_checker = (feature_value) => {
       }
 
       const user_id = req_user.user_id;
-
       // Check Requested Feature Access
       const featureAccessQuery = `
         SELECT 
@@ -221,7 +220,7 @@ const user_feature_access_checker = (feature_value) => {
         featureAccessQuery,
         [user_id, feature_value]
       );
-
+      // console.log("featureRows", featureRows);
       // Feature Not Found In Role
       if (!featureRows || featureRows.length === 0) {
         return res.status(403).json({
@@ -285,7 +284,7 @@ const user_feature_access_checker = (feature_value) => {
           feature_name: feature.feature_name,
           feature_val: feature.feature_val,
         }));
-
+      // console.log("accessible_features", totalFeaturesRows); 
       // Remove Duplicate Features
       const unique_features = accessible_features.filter(
         (feature, index, self) =>
