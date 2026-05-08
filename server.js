@@ -17,7 +17,24 @@ dotenv.config();
 
 const app = express();
 
-app.use(cors());
+const allowedOrigins = [
+  "http://localhost:3000",
+  "http://localhost:3001",
+  "https://atp-client.vercel.app",
+];
+
+app.use(
+  cors({
+    origin(origin, callback) {
+      // Allow non-browser tools (no Origin header) and explicitly allowed web origins.
+      if (!origin || allowedOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+      callback(new Error("Not allowed by CORS"));
+    },
+  }),
+);
 app.use(express.json());
 
 app.get("/", (req, res) => {
