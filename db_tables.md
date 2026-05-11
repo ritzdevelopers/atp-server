@@ -502,3 +502,34 @@ CREATE TABLE attendance_logs (
 );
 
 ADD COLUMN working_time INT;
+
+-- ALTER TABLE attendance
+-- ADD COLUMN working_time INT;
+
+-- ALTER TABLE holidays
+-- ADD COLUMN updated_at TIMESTAMP Default current_timestamp;
+
+
+
+-- ALTER TABLE attendance
+-- MODIFY attendance_status VARCHAR(50);
+
+alter table leave_quiry add column updated_at timestamp default current_timestamp;
+
+
+CREATE TABLE company_leave_sheet (
+	id INT PRIMARY KEY AUTO_INCREMENT,
+    org_id INT,
+    user_id INT,
+    leaves_per_month INT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    foreign key (org_id) references apt_organizations(id),
+    foreign key (user_id) references apt_users(id)
+);
+
+ALTER TABLE company_leave_sheet
+ADD CONSTRAINT unique_user_org
+UNIQUE (org_id, user_id);
+
+alter table user_address rename column zipcode to zip_code;

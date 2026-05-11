@@ -37,8 +37,8 @@ app.use(
 );
 app.use(express.json());
 
-app.get("/", (req, res) => {
-  res.send("Hello World");
+app.get("/", (req, res) => { 
+  res.redirect("http://localhost:3001");
 });
 
 // Register User First Time ::
@@ -72,6 +72,7 @@ app.use("/api/attendance-history", attendanceHistoryRoutes);
 
 // Super Admin Handled Routes ::
 app.use("/api/super-admin", superAdminRoutes);
+ 
 
 app.listen(3000, () => {
   db.connect();

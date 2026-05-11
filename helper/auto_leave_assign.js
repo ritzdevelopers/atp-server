@@ -4,41 +4,129 @@ import db from "./db/connect.js";
 cron.schedule("0 0 1 * *", async () => {
   console.log("Running Monthly Leave Assignment Job...");
 
+  let connection;
+
   try {
-    const connection = await db.promise().getConnection();
+    connection = await db.promise().getConnection();
 
     const now = new Date();
+
     const year = now.getFullYear();
     const month = now.getMonth() + 1;
 
-    // 1. Get all users
-    const [users] = await connection.query(
-      "SELECT user_id, org_id FROM apt_org_members"
-    );
+    // Get all company leave configurations
+    const [companyLeaves] = await connection.query(`
+      SELECT 
+        user_id,
+        org_id,
+        leaves_per_month
+      FROM company_leave_sheet
+    `);
 
-    for (let user of users) {
-      // 2. Check if already assigned this month
-      const [existing] = await connection.query(
-        `SELECT id FROM leave_balance 
-         WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?`,
-        [user.user_id, user.org_id, year, month]
+    if (companyLeaves.length === 0) {
+      console.log("No leave configurations found");
+      return;
+    }
+
+    for (const leaveData of companyLeaves) {
+
+      const {
+        user_id,
+        org_id,
+        leaves_per_month
+      } = leaveData;
+
+      // Check if leave balance already exists for current month
+      const [existingBalance] = await connection.query(
+        `
+        SELECT id 
+        FROM leave_balance
+        WHERE user_id = ?
+        AND org_id = ?
+        AND year = ?
+        AND month = ?
+        `,
+        [user_id, org_id, year, month]
       );
 
-      if (existing.length === 0) {
-        // 3. Insert new leave balance
+      // If not exists -> create new monthly balance
+      if (existingBalance.length === 0) {
+
         await connection.query(
-          `INSERT INTO leave_balance 
-          (user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, last_leave_update)
-          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-          [user.user_id, user.org_id, year, month, 2, 0, 2]
+          `
+          INSERT INTO leave_balance (
+            user_id,
+            org_id,
+            year,
+            month,
+            total_leaves,
+            used_leaves,
+            remaining_leaves,
+            last_leave_update
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+          `,
+          [
+            user_id,
+            org_id,
+            year,
+            month,
+            leaves_per_month,
+            0,
+            leaves_per_month
+          ]
+        );
+
+        console.log(
+          `Leaves assigned to User ${user_id} for Month ${month}`
+        );
+
+      }
+
+      // If already exists -> update leave balance
+      else {
+
+        await connection.query(
+          `
+          UPDATE leave_balance
+          SET
+            total_leaves = ?,
+            remaining_leaves = ?,
+            last_leave_update = NOW()
+          WHERE user_id = ?
+          AND org_id = ?
+          AND year = ?
+          AND month = ?
+          `,
+          [
+            leaves_per_month,
+            leaves_per_month,
+            user_id,
+            org_id,
+            year,
+            month
+          ]
+        );
+
+        console.log(
+          `Leaves updated for User ${user_id} for Month ${month}`
         );
       }
     }
 
-    connection.release();
-    console.log("Leaves assigned successfully");
+    console.log("Monthly leave assignment completed successfully");
 
   } catch (error) {
-    console.error("CRON ERROR:", error);
+
+    console.error(
+      "CRON ERROR IN MONTHLY LEAVE ASSIGNMENT:",
+      error
+    );
+
+  } finally {
+
+    if (connection) {
+      connection.release();
+    }
   }
 });

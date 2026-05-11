@@ -5,7 +5,14 @@ export const markAttendanceController = async (req, res) => {
   const { org_id, user_date, user_time } = req.body;
   const { user_id, user_email, user_role_name } = req.user;
 
-  if (!user_id || !user_email || !user_role_name || !org_id || !user_date || !user_time) {
+  if (
+    !user_id ||
+    !user_email ||
+    !user_role_name ||
+    !org_id ||
+    !user_date ||
+    !user_time
+  ) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
@@ -18,7 +25,7 @@ export const markAttendanceController = async (req, res) => {
     // 1. Check Org
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id]
+      [org_id],
     );
     if (org.length === 0) {
       await connection.rollback();
@@ -28,7 +35,7 @@ export const markAttendanceController = async (req, res) => {
     // 2. Check Membership
     const [member] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
     if (member.length === 0) {
       await connection.rollback();
@@ -38,14 +45,14 @@ export const markAttendanceController = async (req, res) => {
     // 3. Get User Name
     const [userRow] = await connection.query(
       "SELECT user_name FROM apt_users WHERE id = ?",
-      [user_id]
+      [user_id],
     );
     const user_name = userRow[0].user_name;
 
     // 4. IP Check
     const [ips] = await connection.query(
       "SELECT ip_address FROM organization_ips WHERE org_id = ?",
-      [org_id]
+      [org_id],
     );
 
     const allowedIps = ips.map((i) => i.ip_address);
@@ -59,7 +66,7 @@ export const markAttendanceController = async (req, res) => {
     // 5. Check duplicate attendance
     const [attendance] = await connection.query(
       "SELECT id FROM attendance WHERE user_id = ? AND org_id = ? AND attendance_date = ?",
-      [user_id, org_id, user_date]
+      [user_id, org_id, user_date],
     );
 
     if (attendance.length > 0) {
@@ -70,7 +77,7 @@ export const markAttendanceController = async (req, res) => {
     // 6. Get Shift
     const [shiftRow] = await connection.query(
       "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id]
+      [user_id, org_id],
     );
 
     if (shiftRow.length === 0) {
@@ -82,7 +89,7 @@ export const markAttendanceController = async (req, res) => {
 
     const [shift] = await connection.query(
       `SELECT start_time, late_after FROM shifts WHERE id = ?`,
-      [shift_id]
+      [shift_id],
     );
 
     const { start_time, late_after } = shift[0];
@@ -132,7 +139,7 @@ export const markAttendanceController = async (req, res) => {
         checkInDateTime,
         null,
         status,
-      ]
+      ],
     );
 
     await connection.commit();
@@ -141,7 +148,6 @@ export const markAttendanceController = async (req, res) => {
       message: "Check-in marked successfully",
       status,
     });
-
   } catch (error) {
     if (connection) await connection.rollback();
     console.error("Error:", error);
@@ -201,7 +207,7 @@ export const markCheckOutAttendanceController = async (req, res) => {
 
     const allowedIps = ips.map((i) => i.ip_address);
     const userIp = getUserIP(req);
-    // console.log("userIp", userIp); 
+    // console.log("userIp", userIp);
     if (userIp !== "::1" && !allowedIps.includes(userIp)) {
       console.log("check-out Unauthorized IP");
       await connection.rollback();
@@ -2351,7 +2357,7 @@ export const leaveResponseController = async (req, res) => {
 };
 
 // Assign Paid Leaves Controller *Uses By Admin and HR  ::
-/** Sets monthly allotment (existing row upserts total_leaves / remaining with same month’s used unchanged). */
+
 export const assignPaidLeavesController = async (req, res) => {
   let connection;
 
@@ -2426,6 +2432,16 @@ export const assignPaidLeavesController = async (req, res) => {
       });
     }
 
+    const [actorRows] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user.user_id],
+    );
+    if (actorRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User not found" });
+    }
+    const actor_name = actorRows[0].user_name;
+
     const [targetMember] = await connection.query(
       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
       [target_user_id, org_id],
@@ -2448,7 +2464,8 @@ export const assignPaidLeavesController = async (req, res) => {
 
     const [existing] = await connection.query(
       `SELECT id, used_leaves FROM leave_balance
-       WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?`,
+       WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?
+       FOR UPDATE`,
       [target_user_id, org_id, y, mo],
     );
 
@@ -2458,16 +2475,37 @@ export const assignPaidLeavesController = async (req, res) => {
       used = Number(existing[0].used_leaves) || 0;
     }
 
+    if (existing.length > 0 && totalNum < used) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: `total_leaves cannot be less than already used leaves (${used})`,
+      });
+    }
+
     const {
       total,
       used: uFinal,
       remaining,
     } = clampPaidLeaveNumbers(totalNum, used);
 
+    // This updates the default monthly leaves used by the auto-assignment cron.
+    await connection.query(
+      `
+      INSERT INTO company_leave_sheet 
+      (user_id, org_id, leaves_per_month)
+      VALUES (?, ?, ?)
+    
+      ON DUPLICATE KEY UPDATE
+      leaves_per_month = VALUES(leaves_per_month)
+      `,
+      [target_user_id, org_id, totalNum],
+    );
+
     if (existing.length > 0) {
       await connection.query(
         `UPDATE leave_balance
-         SET total_leaves = ?, used_leaves = ?, remaining_leaves = ?
+         SET total_leaves = ?, used_leaves = ?, remaining_leaves = ?,
+             last_leave_update = CURDATE()
          WHERE id = ?`,
         [total, uFinal, remaining, existing[0].id],
       );
@@ -2477,7 +2515,7 @@ export const assignPaidLeavesController = async (req, res) => {
         `INSERT INTO leave_balance (
           user_id, org_id, year, month,
           total_leaves, used_leaves, remaining_leaves, last_leave_update
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, CURDATE())`,
         [target_user_id, org_id, y, mo, total, uFinal, remaining],
       );
       balanceId = ins.insertId;
@@ -2490,7 +2528,7 @@ export const assignPaidLeavesController = async (req, res) => {
       `INSERT INTO management_activity_log 
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
-      [org_id, "ASSIGN_PAID_LEAVES", overview, user.user_id, user.user_name],
+      [org_id, "ASSIGN_PAID_LEAVES", overview, user.user_id, actor_name],
     );
 
     await connection.commit();
@@ -2518,7 +2556,6 @@ export const assignPaidLeavesController = async (req, res) => {
     if (connection) connection.release();
   }
 };
-
 // Update Paid Leaves Controller *Uses By Admin and HR ::
 export const updatePaidLeavesController = async (req, res) => {
   let connection;

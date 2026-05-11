@@ -1,4 +1,4 @@
-import db from "../db/connect.js";
+import db, { pool } from "../db/connect.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
@@ -230,6 +230,11 @@ export const user_register_controller = async (req, res) => {
                         }
                         return res.status(201).json({
                           message: "User registered successfully",
+                          user_id,
+                          data: {
+                            user_id,
+                            org_id: orgId,
+                          },
                         });
                       });
                     },
@@ -1531,5 +1536,486 @@ AND r.role_name NOT IN ('admin', 'hr')`;
   } catch (error) {
     console.error("Error deleting users: ", error);
     res.status(500).json({ message: "Error deleting users" });
+  }
+};
+
+
+export const add_user_address_controller = async (req, res) => {
+  let connection;
+  try {
+    const {
+      address_id,
+      user_id,
+      org_id,
+      country,
+      state,
+      district,
+      city,
+      is_from_village,
+      village_name,
+      street,
+      house_number,
+      zip_code,
+    } = req.body;
+    const { user_id: action_user_id } = req.user || {};
+    const isMissing = (value) =>
+      value === undefined || value === null || String(value).trim() === "";
+    const normalizedIsFromVillage =
+      is_from_village === true ||
+      is_from_village === 1 ||
+      String(is_from_village).toLowerCase() === "true" ||
+      String(is_from_village) === "1"
+        ? 1
+        : 0;
+
+    // All Fields Are Required
+    if (
+      isMissing(user_id) ||
+      isMissing(org_id) ||
+      isMissing(country) ||
+      isMissing(state) ||
+      isMissing(district) ||
+      isMissing(city) ||
+      isMissing(is_from_village) ||
+      (normalizedIsFromVillage === 1 && isMissing(village_name)) ||
+      isMissing(street) ||
+      isMissing(house_number) ||
+      isMissing(zip_code)
+    ) {
+      return res.status(400).json({ message: "All fields are required" });
+    }
+
+    // Check If Action User Is Valid
+    const action_user_check = "SELECT user_name from apt_users where id = ?";
+    // Check If Action User Is Valid Member Of The Organization
+    const action_user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    // Check Organization Is Valid
+    const organization_check = "SELECT * from apt_organizations where id = ?";
+    // Check If User Is Valid
+    const user_check = "SELECT user_name from apt_users where id = ?";
+    // Check If User Is Valid Member Of The Organization
+    const user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    // Save Address In User Address Table -> user_address
+    const save_address_query =
+      "INSERT INTO user_address (user_id, org_id, country, state, district, city, is_from_village, village_name, street, house_number, zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+    // Save Activity In User Activity Logs Table -> apt_user_activity_logs
+    const save_activity_query =
+      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+    // Start Transaction ::
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [actionUserResult] = await connection.query(action_user_check, [
+      action_user_id,
+    ]);
+    if (actionUserResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Action user not found" });
+    }
+    const action_user_name = actionUserResult[0].user_name;
+
+    const [actionMemberResult] = await connection.query(
+      action_user_member_check,
+      [action_user_id, org_id],
+    );
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+      return res
+        .status(403)
+        .json({ message: "Action user is not a member of this organization" });
+    }
+
+    const [organizationResult] = await connection.query(organization_check, [
+      org_id,
+    ]);
+    if (organizationResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    const [userResult] = await connection.query(user_check, [user_id]);
+    if (userResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User not found" });
+    }
+    const affected_user_name = userResult[0].user_name;
+
+    const [userMemberResult] = await connection.query(user_member_check, [
+      user_id,
+      org_id,
+    ]);
+    if (userMemberResult.length === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ message: "User is not a member of this organization" });
+    }
+
+    const normalizedVillageName =
+      normalizedIsFromVillage === 1 ? String(village_name).trim() : null;
+
+    const addressPayload = {
+      user_id,
+      org_id,
+      country,
+      state,
+      district,
+      city,
+      is_from_village: normalizedIsFromVillage,
+      village_name: normalizedVillageName,
+      street,
+      house_number,
+      zip_code,
+    };
+
+    const [addressResult] = await connection.query(save_address_query, [
+      user_id,
+      org_id,
+      country,
+      state,
+      district,
+      city,
+      normalizedIsFromVillage,
+      normalizedVillageName,
+      street,
+      house_number,
+      zip_code,
+    ]);
+
+    await connection.query(save_activity_query, [
+      action_user_id,
+      user_id,
+      org_id,
+      "ADD_USER_ADDRESS",
+      null,
+      JSON.stringify(addressPayload),
+      `Address added for ${affected_user_name} by ${action_user_name}`,
+    ]);
+
+    await connection.commit();
+
+    return res.status(201).json({
+      message: "User address added successfully",
+      data: {
+        id: addressResult.insertId,
+        ...addressPayload,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error adding user address: ", error);
+    return res.status(500).json({ message: "Error adding user address" });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const update_user_address_controller = async (req, res) => {
+  let connection;
+  try {
+    const {
+      user_id,
+      org_id,
+      country,
+      state,
+      district,
+      city,
+      is_from_village,
+      village_name,
+      street,
+      house_number,
+      zip_code,
+      address_id,
+    } = req.body;
+    const { user_id: action_user_id } = req.user || {};
+    const isProvided = (value) => value !== undefined;
+    const isMissing = (value) =>
+      value === undefined || value === null || String(value).trim() === "";
+
+    if (isMissing(user_id) || isMissing(org_id) || isMissing(address_id)) {
+      return res
+        .status(400)
+        .json({ message: "address_id, user_id and org_id are required" });
+    }
+
+    const patchFields = {
+      country,
+      state,
+      district,
+      city,
+      is_from_village,
+      village_name,
+      street,
+      house_number,
+      zip_code,
+    };
+
+    if (!Object.values(patchFields).some(isProvided)) {
+      return res.status(400).json({
+        message: "Provide at least one address field to update",
+      });
+    }
+
+    // Check If Action User Is Valid
+    const action_user_check = "SELECT user_name from apt_users where id = ?";
+    // Check If Action User Is Valid Member Of The Organization
+    const action_user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    // Check Organization Is Valid
+    const organization_check = "SELECT * from apt_organizations where id = ?";
+    // Check If User Is Valid
+    const user_check = "SELECT user_name from apt_users where id = ?";
+    // Check If User Is Valid Member Of The Organization
+    const user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    // Get Existing Address From User Address Table -> user_address
+    const get_address_query =
+      "SELECT * FROM user_address WHERE user_id = ? AND org_id = ? AND id = ? FOR UPDATE";
+    // Update Address In User Address Table -> user_address
+    const update_address_query = (sets) =>
+      `UPDATE user_address SET ${sets.join(", ")} WHERE user_id = ? AND org_id = ? AND id = ?`;
+    // Save Activity In User Activity Logs Table -> apt_user_activity_logs
+    const save_activity_query =
+      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+    // Start Transaction ::
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [actionUserResult] = await connection.query(action_user_check, [
+      action_user_id,
+    ]);
+    if (actionUserResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Action user not found" });
+    }
+    const action_user_name = actionUserResult[0].user_name;
+
+    const [actionMemberResult] = await connection.query(
+      action_user_member_check,
+      [action_user_id, org_id],
+    );
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+      return res
+        .status(403)
+        .json({ message: "Action user is not a member of this organization" });
+    }
+
+    const [organizationResult] = await connection.query(organization_check, [
+      org_id,
+    ]);
+    if (organizationResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    const [userResult] = await connection.query(user_check, [user_id]);
+    if (userResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User not found" });
+    }
+    const affected_user_name = userResult[0].user_name;
+
+    const [userMemberResult] = await connection.query(user_member_check, [
+      user_id,
+      org_id,
+    ]);
+    if (userMemberResult.length === 0) {
+      await connection.rollback();
+      return res
+        .status(404)
+        .json({ message: "User is not a member of this organization" });
+    }
+
+    const [addressRows] = await connection.query(get_address_query, [
+      user_id,
+      org_id,
+      address_id,
+    ]);
+    if (addressRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User address not found" });
+    }
+    const oldAddress = addressRows[0];
+
+    const nextIsFromVillage = isProvided(is_from_village)
+      ? is_from_village === true ||
+        is_from_village === 1 ||
+        String(is_from_village).toLowerCase() === "true" ||
+        String(is_from_village) === "1"
+        ? 1
+        : 0
+      : Number(oldAddress.is_from_village) === 1
+        ? 1
+        : 0;
+
+    const nextVillageName =
+      nextIsFromVillage === 1
+        ? isProvided(village_name)
+          ? String(village_name).trim()
+          : oldAddress.village_name
+        : null;
+
+    if (nextIsFromVillage === 1 && isMissing(nextVillageName)) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "village_name is required when is_from_village is true",
+      });
+    }
+
+    const sets = [];
+    const values = [];
+    const changedPayload = {};
+
+    const addUpdate = (column, value) => {
+      sets.push(`${column} = ?`);
+      values.push(value);
+      changedPayload[column] = value;
+    };
+
+    if (isProvided(country)) addUpdate("country", country);
+    if (isProvided(state)) addUpdate("state", state);
+    if (isProvided(district)) addUpdate("district", district);
+    if (isProvided(city)) addUpdate("city", city);
+    if (isProvided(is_from_village)) {
+      addUpdate("is_from_village", nextIsFromVillage);
+      addUpdate("village_name", nextVillageName);
+    } else if (isProvided(village_name)) {
+      addUpdate("village_name", nextVillageName);
+    }
+    if (isProvided(street)) addUpdate("street", street);
+    if (isProvided(house_number)) addUpdate("house_number", house_number);
+    if (isProvided(zip_code)) addUpdate("zip_code", zip_code);
+
+    if (sets.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Provide at least one address field to update",
+      });
+    }
+
+    values.push(user_id, org_id, address_id);
+    const [updateResult] = await connection.query(
+      update_address_query(sets),
+      values,
+    );
+    if (!updateResult.affectedRows) {
+      await connection.rollback();
+      return res.status(404).json({ message: "User address not found" });
+    }
+
+    await connection.query(save_activity_query, [
+      action_user_id,
+      user_id,
+      org_id,
+      "UPDATE_USER_ADDRESS",
+      JSON.stringify(oldAddress),
+      JSON.stringify(changedPayload),
+      `Address updated for ${affected_user_name} by ${action_user_name}`,
+    ]);
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "User address updated successfully",
+      data: {
+        user_id,
+        org_id,
+        address_id,
+        ...changedPayload,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error updating user address: ", error);
+    return res.status(500).json({ message: "Error updating user address" });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const get_single_user_address_controller = async (req, res) => {
+  try {
+    const { user_id, org_id } = req.params;
+    const { user_id: action_user_id, user_role_name } = req.user || {};
+
+    if (!user_id || !org_id || !action_user_id) {
+      return res.status(400).json({
+        message: "user_id and org_id are required",
+      });
+    }
+
+    const action_user_check = "SELECT user_name from apt_users where id = ?";
+    const action_user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    const organization_check = "SELECT * from apt_organizations where id = ?";
+    const user_check = "SELECT user_name from apt_users where id = ?";
+    const user_member_check =
+      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
+    const get_address_query =
+      "SELECT * FROM user_address WHERE user_id = ? AND org_id = ? ORDER BY id DESC";
+
+    const [actionUserResult] = await db
+      .promise()
+      .query(action_user_check, [action_user_id]);
+    if (actionUserResult.length === 0) {
+      return res.status(404).json({ message: "Action user not found" });
+    }
+
+    const [actionMemberResult] = await db
+      .promise()
+      .query(action_user_member_check, [action_user_id, org_id]);
+    if (actionMemberResult.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "Action user is not a member of this organization" });
+    }
+
+    const canReadOtherUser =
+      user_role_name === "admin" || user_role_name === "hr";
+    if (String(action_user_id) !== String(user_id) && !canReadOtherUser) {
+      return res
+        .status(403)
+        .json({ message: "You can only view your own addresses" });
+    }
+
+    const [organizationResult] = await db
+      .promise()
+      .query(organization_check, [org_id]);
+    if (organizationResult.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    const [userResult] = await db.promise().query(user_check, [user_id]);
+    if (userResult.length === 0) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    const [userMemberResult] = await db
+      .promise()
+      .query(user_member_check, [user_id, org_id]);
+    if (userMemberResult.length === 0) {
+      return res
+        .status(404)
+        .json({ message: "User is not a member of this organization" });
+    }
+
+    const [addresses] = await db
+      .promise()
+      .query(get_address_query, [user_id, org_id]);
+
+    return res.status(200).json({
+      message: "User addresses fetched successfully",
+      data: addresses,
+    });
+  } catch (error) {
+    console.error("Error getting single user address: ", error);
+    return res
+      .status(500)
+      .json({ message: "Error getting single user address" });
   }
 };

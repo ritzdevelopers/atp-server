@@ -2,15 +2,20 @@ import db from "../db/connect.js";
 
 export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
   try {
-    const {
-      userId,
-      month,
-      year,
-      status,
-      page = 1,
-      limit = 10,
-      sort = "DESC",
-    } = req.query;
+    const { user_id } = req.user || {};
+    if (!user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    const { month, year, status, page = 1, limit = 10, sort = "DESC" } =
+      req.query;
+
+    const orderDir = String(sort).toUpperCase() === "ASC" ? "ASC" : "DESC";
+    const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+    const limitNum = Math.min(200, Math.max(1, parseInt(String(limit), 10) || 10));
 
     let query = `
       SELECT 
@@ -24,7 +29,7 @@ export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
       WHERE user_id = ?
     `;
 
-    const values = [userId];
+    const values = [user_id];
 
     if (month && year) {
       query += ` AND MONTH(attendance_date) = ? AND YEAR(attendance_date) = ?`;
@@ -36,20 +41,20 @@ export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
       values.push(status);
     }
 
-    query += ` ORDER BY attendance_date ${sort}`;
+    query += ` ORDER BY attendance_date ${orderDir}`;
 
-    const offset = (page - 1) * limit;
+    const offset = (pageNum - 1) * limitNum;
 
     query += ` LIMIT ? OFFSET ?`;
 
-    values.push(Number(limit), Number(offset));
+    values.push(limitNum, offset);
 
     const [rows] = await db.promise().query(query, values);
 
     res.status(200).json({
       success: true,
-      page: Number(page),
-      limit: Number(limit),
+      page: pageNum,
+      limit: limitNum,
       data: rows,
     });
   } catch (error) {
