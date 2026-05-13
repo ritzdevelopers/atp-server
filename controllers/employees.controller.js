@@ -73,7 +73,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // 5. FULL ATTENDANCE HISTORY 🔥
+    // 5. FULL ATTENDANCE HISTORY 
     const [attendanceHistory] = await db.promise().query(
       `
       SELECT 

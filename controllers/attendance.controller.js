@@ -218,7 +218,10 @@ export const markCheckOutAttendanceController = async (req, res) => {
 
     // 4. Check Attendance Exists
     const [attendance] = await connection.query(
-      `SELECT id, check_in, check_out, attendance_status 
+      `SELECT id,
+        DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+        DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
+        attendance_status 
        FROM attendance 
        WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
       [user_id, org_id, user_date],
@@ -265,8 +268,33 @@ export const markCheckOutAttendanceController = async (req, res) => {
     const previousStatus = existing.attendance_status;
 
     // ---------- TIME HELPERS ----------
+    const extractTime = (value) => {
+      const s = String(value || "").trim();
+      const match = s.match(/(?:^|\s|T)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+      if (!match) return null;
+      const h = Number(match[1]);
+      const m = Number(match[2]);
+      const sec = Number(match[3] ?? 0);
+      if (
+        !Number.isFinite(h) ||
+        !Number.isFinite(m) ||
+        !Number.isFinite(sec) ||
+        h < 0 ||
+        h > 23 ||
+        m < 0 ||
+        m > 59 ||
+        sec < 0 ||
+        sec > 59
+      ) {
+        return null;
+      }
+      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+    };
+
     const toSeconds = (t) => {
-      const [h, m, s] = t.split(":").map(Number);
+      const normalized = extractTime(t);
+      if (!normalized) return NaN;
+      const [h, m, s] = normalized.split(":").map(Number);
       return h * 3600 + m * 60 + s;
     };
 
@@ -277,7 +305,9 @@ export const markCheckOutAttendanceController = async (req, res) => {
     };
 
     const timeToMinutes = (time) => {
-      const [h, m, s] = time.split(":").map(Number);
+      const normalized = extractTime(time);
+      if (!normalized) return NaN;
+      const [h, m, s] = normalized.split(":").map(Number);
       return h * 60 + m + s / 60;
     };
 
@@ -287,17 +317,13 @@ export const markCheckOutAttendanceController = async (req, res) => {
     const realWorkingMinutes = calculateWorkingTime(start_time, end_time);
 
     // User working minutes
-    const checkInTime = new Date(existing.check_in)
-      .toTimeString()
-      .split(" ")[0];
+    const checkInTime = extractTime(existing.check_in);
+    const checkOutTime = extractTime(user_time);
 
-    const checkoutParsed = new Date(user_time);
-    if (Number.isNaN(checkoutParsed.getTime())) {
+    if (!checkInTime || !checkOutTime) {
       await connection.rollback();
       return res.status(400).json({ message: "Invalid user_time" });
     }
-
-    const checkOutTime = checkoutParsed.toTimeString().split(" ")[0];
 
     console.log(
       "Check Out Time:",
@@ -339,10 +365,7 @@ export const markCheckOutAttendanceController = async (req, res) => {
     // FINAL STATUS (late + full_day etc.)
     const finalStatus = `${previousStatus}_${work_status}`;
 
-    // DATETIME for DB: ISO string (e.g. 2026-05-01T04:51:00.000Z) → YYYY-MM-DD HH:mm:ss (UTC)
-    const checkOutDateTime = String(user_time).includes("T")
-      ? checkoutParsed.toISOString().slice(0, 19).replace("T", " ")
-      : `${user_date} ${user_time}`;
+    const checkOutDateTime = `${user_date} ${checkOutTime}`;
 
     // ---------- UPDATE ----------
     await connection.query(
