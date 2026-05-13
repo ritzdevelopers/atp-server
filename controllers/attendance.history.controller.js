@@ -20,9 +20,9 @@ export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
     let query = `
       SELECT 
         id AS attendance_id,
-        attendance_date AS date,
-        check_in,
-        check_out,
+        DATE_FORMAT(attendance_date, '%Y-%m-%d') AS date,
+        DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+        DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
         attendance_status AS status,
         working_time
       FROM attendance
@@ -108,9 +108,9 @@ export const get_all_users_with_attendance_history = async (req, res) => {
       user_info.user_email,
       user_info.user_role_name,
       user_info.user_id AS user_id,
-      user_info.attendance_date,
-      user_info.check_in,
-      user_info.check_out,
+      DATE_FORMAT(user_info.attendance_date, '%Y-%m-%d') AS attendance_date,
+      DATE_FORMAT(user_info.check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+      DATE_FORMAT(user_info.check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
       user_info.attendance_status,
       user_info.working_time,
   
@@ -181,9 +181,9 @@ export const get_single_user_with_attendance_history = async (req, res) => {
       user_info.user_email,
       user_info.user_role_name,
       user_info.id AS user_id,
-      user_info.attendance_date,
-      user_info.check_in,
-      user_info.check_out,
+      DATE_FORMAT(user_info.attendance_date, '%Y-%m-%d') AS attendance_date,
+      DATE_FORMAT(user_info.check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+      DATE_FORMAT(user_info.check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
       user_info.attendance_status,
       user_info.working_time,
       apt_users.created_at AS joining_date
