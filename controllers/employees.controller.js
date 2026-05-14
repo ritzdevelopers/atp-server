@@ -77,6 +77,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
     const [attendanceHistory] = await db.promise().query(
       `
       SELECT 
+        id,
         DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date,
         DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
         DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,

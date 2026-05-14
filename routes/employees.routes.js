@@ -1,7 +1,12 @@
 import { Router } from "express";   
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import { getEmployeesFullInformationController, updateImageAndNameOfEmployeeController } from "../controllers/employees.controller.js";
-import { leaveQueryController, markAttendanceController, markCheckOutAttendanceController } from "../controllers/attendance.controller.js";
+import {
+  addAttendanceLogController,
+  leaveQueryController,
+  markAttendanceController,
+  markCheckOutAttendanceController,
+} from "../controllers/attendance.controller.js";
 
 const router = Router();
 
@@ -16,6 +21,9 @@ router.post("/mark-attendance-check-in", user_validation_middleware, markAttenda
 
 // Mark Attendance *Check Out Of Employee ::
 router.post("/mark-attendance-check-out", user_validation_middleware, markCheckOutAttendanceController);
+
+// ENTRY/EXIT log (e.g. stepped out briefly) for today's attendance row
+router.post("/add-attendance-log", user_validation_middleware, addAttendanceLogController);
 
 // Get Attendance History Of Employee ::
 

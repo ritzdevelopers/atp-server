@@ -1,45 +1,90 @@
 import { pool as db } from "../db/connect.js";
+import { markAttendanceLogController } from "../helper/mark_attendance_logs.js";
+
+const INDIA_TIMEZONE = "Asia/Kolkata";
+
+/** Calendar date + naive datetime string in Asia/Kolkata (IST), stable for MySQL storage. */
+function getIndiaAttendanceClock() {
+  const now = new Date();
+  const formatted = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: INDIA_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+  const [datePart, timePart] = formatted.split(" ");
+  if (!datePart || !timePart) return null;
+  return {
+    attendance_date: datePart,
+    check_in: `${datePart} ${timePart}`,
+    time_part: timePart,
+  };
+}
+
+/** Minutes since midnight from trailing HH:mm:ss (e.g. on `YYYY-MM-DD HH:mm:ss` or `HH:mm:ss`). */
+function wallTimeToMinutesSinceMidnight(value) {
+  if (value == null || value === "") return NaN;
+  const s = String(value).trim();
+  const m = s.match(/(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return NaN;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  const sec = Number(m[3] ?? 0);
+  if (![h, mi, sec].every((x) => Number.isFinite(x))) return NaN;
+  return h * 60 + mi + sec / 60;
+}
 
 // Check In Attendance Controller
 export const markAttendanceController = async (req, res) => {
-  const { org_id, user_date, user_time } = req.body;
+  const { org_id } = req.body;
+
   const { user_id, user_email, user_role_name } = req.user;
 
-  if (
-    !user_id ||
-    !user_email ||
-    !user_role_name ||
-    !org_id ||
-    !user_date ||
-    !user_time
-  ) {
-    return res.status(400).json({ message: "All fields are required" });
+  if (!user_id || !user_email || !user_role_name || !org_id) {
+    return res.status(400).json({
+      message: "All fields are required",
+    });
   }
 
   let connection;
 
   try {
     connection = await db.promise().getConnection();
+
     await connection.beginTransaction();
 
-    // 1. Check Org
+    // 1. Check Organization
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
       [org_id],
     );
+
     if (org.length === 0) {
       await connection.rollback();
-      return res.status(404).json({ message: "Organization not found" });
+
+      return res.status(404).json({
+        message: "Organization not found",
+      });
     }
 
     // 2. Check Membership
     const [member] = await connection.query(
-      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      `SELECT user_id
+       FROM apt_org_members
+       WHERE user_id = ? AND org_id = ?`,
       [user_id, org_id],
     );
+
     if (member.length === 0) {
       await connection.rollback();
-      return res.status(403).json({ message: "User not part of organization" });
+
+      return res.status(403).json({
+        message: "User not part of organization",
+      });
     }
 
     // 3. Get User Name
@@ -47,6 +92,7 @@ export const markAttendanceController = async (req, res) => {
       "SELECT user_name FROM apt_users WHERE id = ?",
       [user_id],
     );
+
     const user_name = userRow[0].user_name;
 
     // 4. IP Check
@@ -56,43 +102,73 @@ export const markAttendanceController = async (req, res) => {
     );
 
     const allowedIps = ips.map((i) => i.ip_address);
+
     const userIp = getUserIP(req);
-    console.log("check-in userIp", userIp);
-    if (userIp !== "::1" && !allowedIps.includes(userIp)) {
+ 
+
+    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !allowedIps.includes(userIp)) {
       await connection.rollback();
-      return res.status(403).json({ message: "Unauthorized IP" });
+
+      return res.status(403).json({
+        message: "Unauthorized IP",
+      });
     }
 
-    // 5. Check duplicate attendance
+    const indiaClock = getIndiaAttendanceClock();
+    if (!indiaClock) {
+      await connection.rollback();
+      return res.status(500).json({
+        success: false,
+        message: "Could not resolve attendance date/time",
+      });
+    }
+
+    const { attendance_date, check_in, time_part } = indiaClock;
+
+    // 5. Duplicate Attendance Check (India calendar day)
     const [attendance] = await connection.query(
-      "SELECT id FROM attendance WHERE user_id = ? AND org_id = ? AND attendance_date = ?",
-      [user_id, org_id, user_date],
+      `SELECT id
+       FROM attendance
+       WHERE user_id = ?
+       AND org_id = ?
+       AND attendance_date = ?`,
+      [user_id, org_id, attendance_date],
     );
 
     if (attendance.length > 0) {
       await connection.rollback();
-      return res.status(400).json({ message: "Attendance already marked" });
+
+      return res.status(400).json({
+        message: "Attendance already marked",
+      });
     }
 
-    // 6. Get Shift
+    // 7. Get Shift
     const [shiftRow] = await connection.query(
-      "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
+      `SELECT shift_id
+       FROM user_shifts
+       WHERE user_id = ? AND org_id = ?`,
       [user_id, org_id],
     );
 
     if (shiftRow.length === 0) {
       await connection.rollback();
-      return res.status(404).json({ message: "Shift not assigned" });
+
+      return res.status(404).json({
+        message: "Shift not assigned",
+      });
     }
 
     const shift_id = shiftRow[0].shift_id;
 
     const [shift] = await connection.query(
-      `SELECT start_time, late_after FROM shifts WHERE id = ?`,
+      `SELECT start_time, late_after
+       FROM shifts
+       WHERE id = ?`,
       [shift_id],
     );
 
-    const { start_time, late_after } = shift[0];
+    const { late_after } = shift[0];
 
     // ---------- TIME HELPER ----------
     const toMinutes = (time) => {
@@ -103,100 +179,385 @@ export const markAttendanceController = async (req, res) => {
       }
 
       const [h, m] = String(time).split(":").map(Number);
+
       return h * 60 + m;
     };
 
-    const userMin = toMinutes(user_time);
-    const lateMin = toMinutes(late_after);
+    const currentMinutes = toMinutes(time_part);
+    const lateMinutes = toMinutes(late_after);
 
-    if (isNaN(userMin) || isNaN(lateMin)) {
+    if (Number.isNaN(currentMinutes) || Number.isNaN(lateMinutes)) {
       await connection.rollback();
-      return res.status(400).json({ message: "Invalid time format" });
+      return res.status(400).json({ message: "Invalid time format for check-in or shift late_after" });
     }
 
-    // ---------- STATUS LOGIC ----------
+    // ---------- STATUS ----------
     let status = "present";
 
-    if (userMin > lateMin) {
+    if (currentMinutes > lateMinutes) {
       status = "late";
     }
 
-    // ---------- DATETIME FORMAT ----------
-    const checkInDateTime = `${user_date} ${user_time}`;
-
-    // ---------- INSERT ----------
-    await connection.query(
-      `INSERT INTO attendance 
-       (user_id, user_name, user_email, user_role_name, org_id, attendance_date, check_in, check_out, attendance_status)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    // 8. Insert Attendance
+    const [attendanceResult] = await connection.query(
+      `INSERT INTO attendance
+      (
+        user_id,
+        user_name,
+        user_email,
+        user_role_name,
+        org_id,
+        attendance_date,
+        check_in,
+        attendance_status
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user_id,
         user_name,
         user_email,
         user_role_name,
         org_id,
-        user_date,
-        checkInDateTime,
-        null,
+        attendance_date,
+        check_in,
         status,
       ],
     );
 
+    // 9. Create Attendance Log
+   const ats_res = await markAttendanceLogController(
+    connection,
+    user_id,
+    org_id,
+    attendanceResult.insertId,
+    userIp
+  ); 
+   // rollback if success is false
+   if (ats_res.success === false) {
+    await connection.rollback();
+    return res.status(400).json({
+      success: false,
+      message: ats_res.message,
+    });
+   }
     await connection.commit();
 
     return res.status(200).json({
+      success: true,
       message: "Check-in marked successfully",
       status,
+      attendance_id: attendanceResult.insertId,
     });
+
   } catch (error) {
-    if (connection) await connection.rollback();
+
+    if (connection) {
+      await connection.rollback();
+    }
+
     console.error("Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+
   } finally {
-    if (connection) connection.release();
+
+    if (connection) {
+      connection.release();
+    }
   }
 };
+// Check Out Attendance Controller
+// export const markCheckOutAttendanceController = async (req, res) => {
+//   const { org_id, user_date, user_time } = req.body;
+//   const { user_id, user_email, user_role_name } = req.user;
 
+//   if (
+//     !user_id ||
+//     !user_email ||
+//     !user_role_name ||
+//     !org_id ||
+//     !user_date ||
+//     !user_time
+//   ) {
+//     return res.status(400).json({ message: "All fields are required" });
+//   }
+
+//   let connection;
+
+//   try {
+//     connection = await db.promise().getConnection();
+//     await connection.beginTransaction();
+
+//     // 1. Check Org
+//     const [org] = await connection.query(
+//       "SELECT id FROM apt_organizations WHERE id = ?",
+//       [org_id],
+//     );
+//     if (org.length === 0) {
+//       await connection.rollback();
+//       return res.status(404).json({ message: "Organization not found" });
+//     }
+
+//     // 2. Check Membership
+//     const [member] = await connection.query(
+//       "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+//       [user_id, org_id],
+//     );
+//     if (member.length === 0) {
+//       await connection.rollback();
+//       return res.status(403).json({ message: "User not part of organization" });
+//     }
+
+//     // 3. IP Check
+//     const [ips] = await connection.query(
+//       "SELECT ip_address FROM organization_ips WHERE org_id = ?",
+//       [org_id],
+//     );
+
+//     const allowedIps = ips.map((i) => i.ip_address);
+//     const userIp = getUserIP(req);
+//     // console.log("userIp", userIp);
+//     if (userIp !== "::1" && !allowedIps.includes(userIp)) {
+//       console.log("check-out Unauthorized IP");
+//       await connection.rollback();
+//       return res.status(403).json({
+//         message: "Unauthorized IP. Contact Admin",
+//       });
+//     }
+
+//     // 4. Check Attendance Exists
+//     const [attendance] = await connection.query(
+//       `SELECT id,
+//         DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+//         DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
+//         attendance_status 
+//        FROM attendance 
+//        WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
+//       [user_id, org_id, user_date],
+//     );
+
+//     if (attendance.length === 0) {
+//       await connection.rollback();
+//       return res.status(400).json({
+//         message: "Check-in not found. Please check-in first",
+//       });
+//     }
+
+//     const existing = attendance[0];
+
+//     if (existing.check_out) {
+//       await connection.rollback();
+//       return res.status(400).json({
+//         message: "Check-out already done",
+//       });
+//     }
+
+//     // 5. Get Shift
+//     const [shiftRow] = await connection.query(
+//       "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
+//       [user_id, org_id],
+//     );
+
+//     if (shiftRow.length === 0) {
+//       await connection.rollback();
+//       return res.status(404).json({ message: "Shift not assigned" });
+//     }
+
+//     const shift_id = shiftRow[0].shift_id;
+
+//     const [shift] = await connection.query(
+//       `SELECT start_time, end_time, half_day_hours, short_leave_hours
+//        FROM shifts WHERE id = ?`,
+//       [shift_id],
+//     );
+
+//     const { start_time, end_time, half_day_hours, short_leave_hours } =
+//       shift[0];
+
+//     const previousStatus = existing.attendance_status;
+
+//     // ---------- TIME HELPERS ----------
+//     const extractTime = (value) => {
+//       const s = String(value || "").trim();
+//       const match = s.match(/(?:^|\s|T)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+//       if (!match) return null;
+//       const h = Number(match[1]);
+//       const m = Number(match[2]);
+//       const sec = Number(match[3] ?? 0);
+//       if (
+//         !Number.isFinite(h) ||
+//         !Number.isFinite(m) ||
+//         !Number.isFinite(sec) ||
+//         h < 0 ||
+//         h > 23 ||
+//         m < 0 ||
+//         m > 59 ||
+//         sec < 0 ||
+//         sec > 59
+//       ) {
+//         return null;
+//       }
+//       return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+//     };
+
+//     const toSeconds = (t) => {
+//       const normalized = extractTime(t);
+//       if (!normalized) return NaN;
+//       const [h, m, s] = normalized.split(":").map(Number);
+//       return h * 3600 + m * 60 + s;
+//     };
+
+//     const calculateWorkingTime = (start, end) => {
+//       const diff = toSeconds(end) - toSeconds(start);
+//       if (diff < 0) throw new Error("End time must be greater than start time");
+//       return diff / 60; // minutes
+//     };
+
+//     const timeToMinutes = (time) => {
+//       const normalized = extractTime(time);
+//       if (!normalized) return NaN;
+//       const [h, m, s] = normalized.split(":").map(Number);
+//       return h * 60 + m + s / 60;
+//     };
+
+//     // ---------- CALCULATIONS ----------
+
+//     // Shift working minutes
+//     const realWorkingMinutes = calculateWorkingTime(start_time, end_time);
+
+//     // User working minutes
+//     const checkInTime = extractTime(existing.check_in);
+//     const checkOutTime = extractTime(user_time);
+
+//     if (!checkInTime || !checkOutTime) {
+//       await connection.rollback();
+//       return res.status(400).json({ message: "Invalid user_time" });
+//     }
+
+//     console.log(
+//       "Check Out Time:",
+//       checkOutTime,
+//       "Split Check In Time: ",
+//       checkInTime,
+//       "User Time:",
+//       user_time,
+//     );
+
+//     const userWorkingMinutes = calculateWorkingTime(checkInTime, checkOutTime);
+
+//     // Limits
+//     const halfDayMinutes = timeToMinutes(half_day_hours);
+//     const shortLeaveMinutes = timeToMinutes(short_leave_hours);
+
+//     // ---------- WORK STATUS ----------
+//     let work_status;
+
+//     if (userWorkingMinutes >= realWorkingMinutes) {
+//       work_status = "full_day";
+//     } else if (userWorkingMinutes >= shortLeaveMinutes) {
+//       work_status = "short_leave";
+//     } else if (userWorkingMinutes >= halfDayMinutes) {
+//       work_status = "half_day";
+//     } else {
+//       work_status = "absent";
+//     }
+
+//     console.log(
+//       "Working Status:",
+//       work_status,
+//       "Previous Status:",
+//       previousStatus,
+//       "User Working Minutes:",
+//       userWorkingMinutes,
+//     );
+
+//     // FINAL STATUS (late + full_day etc.)
+//     const finalStatus = `${previousStatus}_${work_status}`;
+
+//     const checkOutDateTime = `${user_date} ${checkOutTime}`;
+
+//     // ---------- UPDATE ----------
+//     await connection.query(
+//       `UPDATE attendance 
+//        SET attendance_status = ?, check_out = ?, working_time = ? 
+//        WHERE id = ?`,
+//       [finalStatus, checkOutDateTime, userWorkingMinutes, existing.id],
+//     );
+
+//     await connection.commit();
+
+//     return res.status(200).json({
+//       message: "Check-out marked successfully",
+//       finalStatus,
+//       workingMinutes: userWorkingMinutes,
+//     });
+//   } catch (error) {
+//     if (connection) await connection.rollback();
+//     console.error("Error:", error);
+//     return res.status(500).json({ message: "Internal server error" });
+//   } finally {
+//     if (connection) connection.release();
+//   }
+// };
 // Check Out Attendance Controller
 export const markCheckOutAttendanceController = async (req, res) => {
-  const { org_id, user_date, user_time } = req.body;
+
+  const { org_id } = req.body;
+
   const { user_id, user_email, user_role_name } = req.user;
 
   if (
     !user_id ||
     !user_email ||
     !user_role_name ||
-    !org_id ||
-    !user_date ||
-    !user_time
+    !org_id
   ) {
-    return res.status(400).json({ message: "All fields are required" });
+    return res.status(400).json({
+      message: "All fields are required",
+    });
   }
 
   let connection;
 
   try {
+
     connection = await db.promise().getConnection();
+
     await connection.beginTransaction();
 
-    // 1. Check Org
+    // 1. Check Organization
     const [org] = await connection.query(
       "SELECT id FROM apt_organizations WHERE id = ?",
       [org_id],
     );
+
     if (org.length === 0) {
+
       await connection.rollback();
-      return res.status(404).json({ message: "Organization not found" });
+
+      return res.status(404).json({
+        message: "Organization not found",
+      });
     }
 
     // 2. Check Membership
     const [member] = await connection.query(
-      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      `SELECT user_id
+       FROM apt_org_members
+       WHERE user_id = ? AND org_id = ?`,
       [user_id, org_id],
     );
+
     if (member.length === 0) {
+
       await connection.rollback();
-      return res.status(403).json({ message: "User not part of organization" });
+
+      return res.status(403).json({
+        message: "User not part of organization",
+      });
     }
 
     // 3. IP Check
@@ -206,191 +567,240 @@ export const markCheckOutAttendanceController = async (req, res) => {
     );
 
     const allowedIps = ips.map((i) => i.ip_address);
+
     const userIp = getUserIP(req);
-    // console.log("userIp", userIp);
-    if (userIp !== "::1" && !allowedIps.includes(userIp)) {
-      console.log("check-out Unauthorized IP");
+
+    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !allowedIps.includes(userIp)) {
+
       await connection.rollback();
+
       return res.status(403).json({
-        message: "Unauthorized IP. Contact Admin",
+        message: "Unauthorized IP",
       });
     }
 
-    // 4. Check Attendance Exists
+    const indiaClock = getIndiaAttendanceClock();
+    if (!indiaClock) {
+      await connection.rollback();
+      return res.status(500).json({
+        success: false,
+        message: "Could not resolve attendance date/time",
+      });
+    }
+
+    const { attendance_date, time_part } = indiaClock;
+    const check_out = `${attendance_date} ${time_part}`;
+
+    // 4. Get Attendance (India calendar day — same as check-in)
     const [attendance] = await connection.query(
-      `SELECT id,
-        DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
-        DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
-        attendance_status 
-       FROM attendance 
-       WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
-      [user_id, org_id, user_date],
+      `SELECT 
+          id,
+          DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+          DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
+          attendance_status
+       FROM attendance
+       WHERE user_id = ?
+       AND org_id = ?
+       AND attendance_date = ?`,
+      [user_id, org_id, attendance_date],
     );
 
     if (attendance.length === 0) {
+
       await connection.rollback();
+
       return res.status(400).json({
-        message: "Check-in not found. Please check-in first",
+        message: "Check-in not found",
       });
     }
 
     const existing = attendance[0];
 
+    // Already checked out
     if (existing.check_out) {
+
       await connection.rollback();
+
       return res.status(400).json({
         message: "Check-out already done",
       });
     }
 
-    // 5. Get Shift
+    // 6. Get Shift
     const [shiftRow] = await connection.query(
-      "SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
+      `SELECT shift_id
+       FROM user_shifts
+       WHERE user_id = ? AND org_id = ?`,
       [user_id, org_id],
     );
 
     if (shiftRow.length === 0) {
+
       await connection.rollback();
-      return res.status(404).json({ message: "Shift not assigned" });
+
+      return res.status(404).json({
+        message: "Shift not assigned",
+      });
     }
 
     const shift_id = shiftRow[0].shift_id;
 
     const [shift] = await connection.query(
-      `SELECT start_time, end_time, half_day_hours, short_leave_hours
-       FROM shifts WHERE id = ?`,
+      `SELECT
+          start_time,
+          end_time,
+          half_day_hours,
+          short_leave_hours
+       FROM shifts
+       WHERE id = ?`,
       [shift_id],
     );
 
-    const { start_time, end_time, half_day_hours, short_leave_hours } =
-      shift[0];
+    const {
+      start_time,
+      end_time,
+      half_day_hours,
+      short_leave_hours,
+    } = shift[0];
 
-    const previousStatus = existing.attendance_status;
-
-    // ---------- TIME HELPERS ----------
-    const extractTime = (value) => {
-      const s = String(value || "").trim();
-      const match = s.match(/(?:^|\s|T)(\d{1,2}):(\d{2})(?::(\d{2}))?/);
-      if (!match) return null;
-      const h = Number(match[1]);
-      const m = Number(match[2]);
-      const sec = Number(match[3] ?? 0);
-      if (
-        !Number.isFinite(h) ||
-        !Number.isFinite(m) ||
-        !Number.isFinite(sec) ||
-        h < 0 ||
-        h > 23 ||
-        m < 0 ||
-        m > 59 ||
-        sec < 0 ||
-        sec > 59
-      ) {
-        return null;
-      }
-      return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
-    };
-
-    const toSeconds = (t) => {
-      const normalized = extractTime(t);
-      if (!normalized) return NaN;
-      const [h, m, s] = normalized.split(":").map(Number);
-      return h * 3600 + m * 60 + s;
-    };
-
-    const calculateWorkingTime = (start, end) => {
-      const diff = toSeconds(end) - toSeconds(start);
-      if (diff < 0) throw new Error("End time must be greater than start time");
-      return diff / 60; // minutes
-    };
+    // ---------- HELPERS ----------
 
     const timeToMinutes = (time) => {
-      const normalized = extractTime(time);
-      if (!normalized) return NaN;
-      const [h, m, s] = normalized.split(":").map(Number);
-      return h * 60 + m + s / 60;
+
+      if (!time) return NaN;
+
+      const [h, m, s] = String(time)
+        .split(":")
+        .map(Number);
+
+      return h * 60 + m + (s || 0) / 60;
     };
 
-    // ---------- CALCULATIONS ----------
+    const currentMinutes = wallTimeToMinutesSinceMidnight(time_part);
+    const checkInMinutes = wallTimeToMinutesSinceMidnight(existing.check_in);
 
-    // Shift working minutes
-    const realWorkingMinutes = calculateWorkingTime(start_time, end_time);
-
-    // User working minutes
-    const checkInTime = extractTime(existing.check_in);
-    const checkOutTime = extractTime(user_time);
-
-    if (!checkInTime || !checkOutTime) {
+    if (Number.isNaN(currentMinutes) || Number.isNaN(checkInMinutes)) {
       await connection.rollback();
-      return res.status(400).json({ message: "Invalid user_time" });
+      return res.status(400).json({
+        message: "Invalid check-in or checkout time for working hours calculation",
+      });
     }
 
-    console.log(
-      "Check Out Time:",
-      checkOutTime,
-      "Split Check In Time: ",
-      checkInTime,
-      "User Time:",
-      user_time,
-    );
+    // ---------- SHIFT WORKING TIME ----------
 
-    const userWorkingMinutes = calculateWorkingTime(checkInTime, checkOutTime);
+    const shiftStart = timeToMinutes(start_time);
 
-    // Limits
-    const halfDayMinutes = timeToMinutes(half_day_hours);
-    const shortLeaveMinutes = timeToMinutes(short_leave_hours);
+    const shiftEnd = timeToMinutes(end_time);
+
+    const realWorkingMinutes = shiftEnd - shiftStart;
+
+    // ---------- USER WORKING TIME ----------
+
+    const userWorkingMinutes = Math.round(currentMinutes - checkInMinutes);
+
+    if (userWorkingMinutes < 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Checkout time is before check-in time",
+      });
+    }
+
+    // ---------- LIMITS ----------
+
+    const halfDayMinutes =
+      timeToMinutes(half_day_hours);
+
+    const shortLeaveMinutes =
+      timeToMinutes(short_leave_hours);
 
     // ---------- WORK STATUS ----------
+
     let work_status;
 
     if (userWorkingMinutes >= realWorkingMinutes) {
+
       work_status = "full_day";
-    } else if (userWorkingMinutes >= shortLeaveMinutes) {
+
+    } else if (
+      userWorkingMinutes >= shortLeaveMinutes
+    ) {
+
       work_status = "short_leave";
-    } else if (userWorkingMinutes >= halfDayMinutes) {
+
+    } else if (
+      userWorkingMinutes >= halfDayMinutes
+    ) {
+
       work_status = "half_day";
+
     } else {
+
       work_status = "absent";
     }
 
-    console.log(
-      "Working Status:",
-      work_status,
-      "Previous Status:",
-      previousStatus,
-      "User Working Minutes:",
-      userWorkingMinutes,
-    );
+    // ---------- FINAL STATUS ----------
 
-    // FINAL STATUS (late + full_day etc.)
-    const finalStatus = `${previousStatus}_${work_status}`;
+    const previousStatus =
+      existing.attendance_status;
 
-    const checkOutDateTime = `${user_date} ${checkOutTime}`;
+    const finalStatus =
+      `${previousStatus}_${work_status}`;
 
     // ---------- UPDATE ----------
+
     await connection.query(
-      `UPDATE attendance 
-       SET attendance_status = ?, check_out = ?, working_time = ? 
+      `UPDATE attendance
+       SET
+         attendance_status = ?,
+         check_out = ?,
+         working_time = ?
        WHERE id = ?`,
-      [finalStatus, checkOutDateTime, userWorkingMinutes, existing.id],
+      [
+        finalStatus,
+        check_out,
+        userWorkingMinutes,
+        existing.id,
+      ],
     );
 
+    // ---------- ATTENDANCE LOG ----------
+
+  const ats_res =  await markAttendanceLogController(
+    connection,
+      user_id,
+      org_id,
+      existing.id,
+      userIp,
+    ); 
     await connection.commit();
 
     return res.status(200).json({
+      success: true,
       message: "Check-out marked successfully",
       finalStatus,
       workingMinutes: userWorkingMinutes,
     });
+
   } catch (error) {
-    if (connection) await connection.rollback();
+
+    if (connection) {
+      await connection.rollback();
+    }
+
     console.error("Error:", error);
-    return res.status(500).json({ message: "Internal server error" });
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+
   } finally {
-    if (connection) connection.release();
+
+    if (connection) {
+      connection.release();
+    }
   }
 };
-
 //  Better IP extraction
 const getUserIP = (req) => {
   return (
@@ -438,8 +848,7 @@ export const createCompanyWorkShiftsController = async (req, res) => {
       short_leave_hours,
       is_night_shift,
       working_days,
-    } = req.body;
-    console.log(req.body);
+    } = req.body; 
     // 3. Validate Required Fields
     if (
       !org_id ||
@@ -2854,3 +3263,90 @@ function timeToMinutes(time) {
 
   return hours * 60 + minutes + seconds / 60;
 }
+
+
+export const addAttendanceLogController = async (req, res) => {
+
+  let connection;
+
+  try {
+
+    const { user_id } = req.user;
+    const { org_id, attendance_id } = req.body;
+
+    if (!org_id || !attendance_id) {
+      return res.status(400).json({
+        message: "org_id and attendance_id are required",
+      });
+    }
+
+    connection = await db.promise().getConnection();
+
+    await connection.beginTransaction();
+
+    const [attendance] = await connection.query(
+      `SELECT id
+       FROM attendance
+       WHERE id = ?
+       AND org_id = ?
+       AND user_id = ?`,
+      [attendance_id, org_id, user_id]
+    );
+
+    if (attendance.length === 0) {
+
+      await connection.rollback();
+
+      return res.status(404).json({
+        message: "Attendance not found",
+      });
+    }
+
+    const ip_address = getUserIP(req);
+
+    const ats_res = await markAttendanceLogController(
+      connection,
+      user_id,
+      org_id,
+      attendance_id,
+      ip_address
+    );
+
+    if (!ats_res.success) {
+
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: ats_res.message,
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Attendance log added successfully",
+      data: ats_res,
+    });
+
+  } catch (error) {
+
+    if (connection) {
+      await connection.rollback();
+    }
+
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+
+  } finally {
+
+    if (connection) {
+      connection.release();
+    }
+  }
+};
