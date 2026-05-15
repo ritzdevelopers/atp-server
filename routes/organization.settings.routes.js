@@ -16,6 +16,8 @@ import {
   updateHolidayController,
   deleteHolidayController,
 } from "../controllers/attendance.controller.js";
+import { assign_ip_address_to_user_controller, unassign_ip_address_from_user_controller } from "../controllers/user.controller.js";
+import req_sender_auth from "../middlewares/req_sender_auth.js";
 
 
 const router = Router();
@@ -26,6 +28,10 @@ router.post("/create-new-ip-address", user_validation_middleware, user_authoriza
 router.get("/get-ip-addresses", user_validation_middleware, user_authorization("admin", "hr"),  getAllIPAddressesController);
 router.patch("/update-ip-address", user_validation_middleware, user_authorization("admin", "hr"), updateCompanyIPLabelController);
 router.delete("/delete-ip-address", user_validation_middleware, user_authorization("admin", "hr"), deleteCompanyIPAddressController);
+
+// User IP Address Routes
+router.post("/assign-ip-address-to-user", user_validation_middleware, user_authorization("admin", "hr"), req_sender_auth, assign_ip_address_to_user_controller);
+router.delete("/unassign-ip-address-from-user", user_validation_middleware, user_authorization("admin", "hr"), req_sender_auth, unassign_ip_address_from_user_controller);  
 
 
 // Company shifts

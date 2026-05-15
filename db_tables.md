@@ -533,3 +533,55 @@ ADD CONSTRAINT unique_user_org
 UNIQUE (org_id, user_id);
 
 alter table user_address rename column zipcode to zip_code;
+
+
+CREATE TABLE user_docs (
+
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+
+    org_id INT NOT NULL,
+
+    document_name VARCHAR(255),
+
+    document_type VARCHAR(100),
+
+    doc_url TEXT NOT NULL,
+
+    public_id VARCHAR(255),
+
+    resource_type VARCHAR(100),
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP
+
+);
+
+
+CREATE TABLE ip_address_assignments (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+    
+    ip_address VARCHAR(45) NOT NULL,
+    ip_label VARCHAR(150),
+    
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP 
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES apt_users(id),
+    FOREIGN KEY (org_id) REFERENCES apt_organizations(id)
+);
+
+
+ALTER TABLE ip_address_assignments
+ADD COLUMN ip_id INT,
+ADD CONSTRAINT fk_ip_assignment
+FOREIGN KEY (ip_id)
+REFERENCES organization_ips(id)
+ON DELETE CASCADE;

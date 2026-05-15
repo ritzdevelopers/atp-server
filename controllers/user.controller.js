@@ -447,19 +447,36 @@ export const get_all_users_controller = async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    
-    const admin_id = user.user_id; 
+
+    const {user_id: action_user_id} = user;
+    if (!action_user_id) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
 
     // Fetch Organization From apt_org_members
-    const fetch_organization_query = "SELECT org_id FROM apt_org_members WHERE user_id = ?";
-    const [organization_result] = await db.promise().query(fetch_organization_query, [admin_id]);
+    const fetch_organization_query =
+      "SELECT org_id FROM apt_org_members WHERE user_id = ?";
+    const [organization_result] = await db
+      .promise()
+      .query(fetch_organization_query, [action_user_id]);
     if (organization_result.length === 0) {
       return res.status(404).json({ message: "Organization not found" });
     }
     const organization_id = organization_result[0].org_id;
 
-      // If User Role Name Is HR Then Fetch All The Users Of The Organization Except Admin & HR
-      let query = `
+    // Fetch Organization Owner ID 
+    const fetch_organization_owner_id_query =
+      "SELECT owner_id FROM apt_organizations WHERE id = ?";
+    const [organization_owner_id_result] = await db
+      .promise()
+      .query(fetch_organization_owner_id_query, [organization_id]);
+    if (organization_owner_id_result.length === 0) {
+      return res.status(404).json({ message: "Organization owner not found" });
+    }
+    const organization_owner_id = organization_owner_id_result[0].owner_id;
+
+    // Fetch All Users Of The Organization Except Organization Owner
+    const query = `
   SELECT 
     apt_users.id AS id,
     apt_org_members.id AS org_member_id,
@@ -480,7 +497,9 @@ export const get_all_users_controller = async (req, res) => {
     shifts.start_time as user_shift_start_time,
     shifts.end_time as user_shift_end_time,
     shifts.working_days as user_shift_working_days,
-    shifts.is_night_shift as is_night_shift
+    shifts.is_night_shift as is_night_shift,
+
+    user_ip_assignments.assigned_ips AS assigned_ips
 
   FROM apt_org_members 
   INNER JOIN apt_users 
@@ -493,21 +512,31 @@ export const get_all_users_controller = async (req, res) => {
     ON user_shifts.user_id = apt_users.id AND user_shifts.org_id = apt_org_members.org_id
   LEFT JOIN shifts
     ON shifts.id = user_shifts.shift_id AND shifts.org_id = apt_org_members.org_id
-  WHERE apt_org_members.org_id = ?
+  LEFT JOIN (
+    SELECT
+      ia.user_id,
+      ia.org_id,
+      JSON_ARRAYAGG(
+        JSON_OBJECT(
+          'ip_id', ia.ip_id,
+          'ip_address', ia.ip_address,
+          'ip_label', ia.ip_label
+        )
+      ) AS assigned_ips
+    FROM ip_address_assignments ia
+    GROUP BY ia.user_id, ia.org_id
+  ) user_ip_assignments
+    ON user_ip_assignments.user_id = apt_users.id
+    AND user_ip_assignments.org_id = apt_org_members.org_id
+  WHERE apt_org_members.org_id = ? AND apt_users.id != ?
 `;
 
-      db.query(query, [organization_id], (err, result) => {
-        if (err) {
-          console.error("Error fetching users: ", err);
-          return res.status(500).json({ message: "Error fetching users" });
-        }
+    const [result] = await db.promise().query(query, [organization_id, organization_owner_id]);
 
-        return res.status(200).json({
-          message: "Users fetched successfully",
-          users: result,
-          
-        });
-      });
+    return res.status(200).json({
+      message: "Users fetched successfully",
+      users: result,
+    });
   } catch (error) {
     console.error("Error fetching users: ", error);
     res.status(500).json({ message: "Error fetching users" });
@@ -713,7 +742,7 @@ export const update_user_role_controller = async (req, res) => {
     res.status(500).json({ message: "Error updating user role" });
   }
 };
-
+// 
 export const update_user_name_email_phone_password_controller1 = async (
   req,
   res,
@@ -1539,7 +1568,6 @@ AND r.role_name NOT IN ('admin', 'hr')`;
   }
 };
 
-
 export const add_user_address_controller = async (req, res) => {
   let connection;
   try {
@@ -2017,5 +2045,292 @@ export const get_single_user_address_controller = async (req, res) => {
     return res
       .status(500)
       .json({ message: "Error getting single user address" });
+  }
+};
+
+export const assign_ip_address_to_user_controller = async (req, res) => {
+  let connection;
+  try {
+    const { employee_id, ip_id } = req.body;
+    const { org_id } = req;
+    const { user_id: action_user_id } = req.user || {};
+
+    // Validate Required Fields
+    if (!employee_id || !ip_id) {
+      return res.status(400).json({
+        message: "employee_id and ip_id are required",
+      });
+    }
+
+    // Validate Organization & Action User
+    if (!action_user_id || !org_id) {
+      return res.status(400).json({
+        message: "action_user_id and org_id are required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    // Check If Employee Exists
+    const [employeeResult] = await connection.query(
+      "SELECT id FROM apt_users WHERE id = ?",
+      [employee_id],
+    );
+
+    if (employeeResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Employee not found",
+      });
+    }
+
+    // Check If Employee Belongs To Organization
+    const [employeeMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [employee_id, org_id],
+    );
+
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Employee is not a member of this organization",
+      });
+    }
+
+    // Check If IP Exists In Organization
+    const [ipAddressResult] = await connection.query(
+      `SELECT id, ip_address, label 
+       FROM organization_ips 
+       WHERE org_id = ? AND id = ?`,
+      [org_id, ip_id],
+    );
+
+    if (ipAddressResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "IP address not found",
+      });
+    }
+
+    const { ip_address, ip_label } = ipAddressResult[0];
+
+    // Check If IP Already Assigned
+    const [ipAddressAssignmentResult] = await connection.query(
+      `SELECT id 
+       FROM ip_address_assignments 
+       WHERE user_id = ? AND ip_id = ?`,
+      [employee_id, ip_id],
+    );
+
+    if (ipAddressAssignmentResult.length > 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "IP address is already assigned to the employee",
+      });
+    }
+
+    // Assign IP To Employee
+    const [assignIpAddressResult] = await connection.query(
+      `INSERT INTO ip_address_assignments 
+      (user_id, org_id, ip_address, ip_label, ip_id) 
+      VALUES (?, ?, ?, ?, ?)`,
+      [employee_id, org_id, ip_address, ip_label, ip_id],
+    );
+
+    if (!assignIpAddressResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Failed to assign IP address to employee",
+      });
+    }
+
+    const save_activity_query =
+      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const [saveActivityResult] = await connection.query(save_activity_query, [
+      action_user_id,
+      employee_id,
+      org_id,
+      "ASSIGN_IP_ADDRESS",
+      null,
+      JSON.stringify({ ip_id, ip_address, ip_label }),
+      "IP address assigned to employee",
+    ]);
+
+    if (!saveActivityResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "IP address assigned successfully",
+      data: {
+        assignment_id: assignIpAddressResult.insertId,
+        employee_id,
+        ip_id,
+        ip_address,
+        ip_label,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error assigning IP address to user:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const unassign_ip_address_from_user_controller = async (req, res) => {
+  let connection;
+  try {
+    const { employee_id, ip_id } = req.body;
+    const { org_id } = req;
+    const { user_id: action_user_id } = req.user || {};
+
+    // Validate Required Fields
+    if (!employee_id || !ip_id) {
+      return res.status(400).json({
+        message: "employee_id and ip_id are required",
+      });
+    }
+
+    // Validate Organization & Action User
+    if (!action_user_id || !org_id) {
+      return res.status(400).json({
+        message: "action_user_id and org_id are required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    // Check If Employee Exists
+    const [employeeResult] = await connection.query(
+      "SELECT id FROM apt_users WHERE id = ?",
+      [employee_id],
+    );
+
+    if (employeeResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Employee not found",
+      });
+    }
+
+    // Check If Employee Belongs To Organization
+    const [employeeMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [employee_id, org_id],
+    );
+
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Employee is not a member of this organization",
+      });
+    }
+
+    // Check If IP Exists In Organization
+    const [ipAddressResult] = await connection.query(
+      `SELECT id, ip_address, ip_label 
+       FROM organization_ips 
+       WHERE org_id = ? AND id = ?`,
+      [org_id, ip_id],
+    );
+
+    if (ipAddressResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "IP address not found",
+      });
+    }
+
+    // Check assignment exists for this employee, IP, and org
+    const [assignmentRows] = await connection.query(
+      `SELECT id, ip_address, ip_label 
+       FROM ip_address_assignments 
+       WHERE user_id = ? AND ip_id = ? AND org_id = ?`,
+      [employee_id, ip_id, org_id],
+    );
+
+    if (assignmentRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "IP address is not assigned to the employee",
+      });
+    }
+
+    const assignmentRecord = assignmentRows[0];
+
+    const [deleteResult] = await connection.query(
+      `DELETE FROM ip_address_assignments 
+       WHERE id = ? AND user_id = ? AND org_id = ?`,
+      [assignmentRecord.id, employee_id, org_id],
+    );
+
+    if (!deleteResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Failed to unassign IP address from employee",
+      });
+    }
+
+    const save_activity_query =
+      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    const [saveActivityResult] = await connection.query(save_activity_query, [
+      action_user_id,
+      employee_id,
+      org_id,
+      "UNASSIGN_IP_ADDRESS",
+      JSON.stringify({
+        assignment_id: assignmentRecord.id,
+        ip_id,
+        ip_address: assignmentRecord.ip_address,
+        ip_label: assignmentRecord.ip_label,
+      }),
+      null,
+      "IP address unassigned from employee",
+    ]);
+
+    if (!saveActivityResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "IP address unassigned successfully",
+      data: {
+        assignment_id: assignmentRecord.id,
+        employee_id,
+        ip_id,
+        ip_address: assignmentRecord.ip_address,
+        ip_label: assignmentRecord.ip_label,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("Error unassigning IP address from user:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
   }
 };

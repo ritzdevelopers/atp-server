@@ -95,18 +95,25 @@ export const markAttendanceController = async (req, res) => {
 
     const user_name = userRow[0].user_name;
 
-    // 4. IP Check
-    const [ips] = await connection.query(
-      "SELECT ip_address FROM organization_ips WHERE org_id = ?",
-      [org_id],
-    );
-
-    const allowedIps = ips.map((i) => i.ip_address);
+    // 4.  IP Check First Get All User Assigned IPs
+   const [userAssignedIps] = await connection.query(
+    "SELECT ip_address FROM ip_address_assignments WHERE user_id = ? AND org_id = ?",
+    [user_id, org_id],
+   );
+   if (userAssignedIps.length === 0) {
+    await connection.rollback();
+    return res.status(403).json({
+      message: "User not assigned any IP addresses",
+    });
+   } 
+   const assignedIps = userAssignedIps.map(
+    (ip) => ip.ip_address
+  );
 
     const userIp = getUserIP(req);
  
 
-    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !allowedIps.includes(userIp)) {
+    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !assignedIps.includes(userIp)) {
       await connection.rollback();
 
       return res.status(403).json({
@@ -561,16 +568,23 @@ export const markCheckOutAttendanceController = async (req, res) => {
     }
 
     // 3. IP Check
-    const [ips] = await connection.query(
-      "SELECT ip_address FROM organization_ips WHERE org_id = ?",
-      [org_id],
+    const [userAssignedIps] = await connection.query(
+      "SELECT ip_address FROM ip_address_assignments WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
     );
-
-    const allowedIps = ips.map((i) => i.ip_address);
+    if (userAssignedIps.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        message: "User not assigned any IP addresses",
+      });
+    }
+    const assignedIps = userAssignedIps.map(
+      (ip) => ip.ip_address
+    );
 
     const userIp = getUserIP(req);
 
-    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !allowedIps.includes(userIp)) {
+    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !assignedIps.includes(userIp)) {
 
       await connection.rollback();
 
@@ -1839,14 +1853,23 @@ export const getAllIPAddressesController = async (req, res) => {
         .json({ message: "User not part of this organization" });
     }
 
-    // 3. Get All IP Addresses
-    const [ipAddresses] = await db
-      .promise()
-      .query(
-        "SELECT id, ip_address, label, created_at, ip_added_by_name FROM organization_ips WHERE org_id = ? ORDER BY created_at DESC",
-        [org_id],
-      );
-    // 4. Return IP Addresses (empty list is valid)
+    // 3. Get All IP Addresses And Join Total Assigned Users To Each IP Use Left Join On ip_address_assignments Table
+    const [ipAddresses] = await db.promise().query(
+      `SELECT
+  oi.id,
+  oi.ip_address,
+  oi.label,
+  oi.created_at,
+  oi.ip_added_by_name,
+  COUNT(ia.user_id) AS total_assigned_users
+FROM organization_ips oi
+LEFT JOIN ip_address_assignments ia 
+  ON oi.id = ia.ip_id 
+  AND ia.org_id = oi.org_id
+WHERE oi.org_id = ?
+GROUP BY oi.id`,
+      [org_id],
+    );
     return res.status(200).json({
       message: "IP Addresses fetched successfully",
       data: ipAddresses,
