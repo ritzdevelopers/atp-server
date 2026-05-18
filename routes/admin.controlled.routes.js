@@ -8,6 +8,9 @@ import {
   add_user_address_controller,
   update_user_address_controller,
   get_single_user_address_controller,
+  add_user_external_information_controller,
+  update_user_external_information_controller,
+  delete_user_external_information_controller,
 } from "../controllers/user.controller.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import user_authorization from "../middlewares/user_authorization.js";
@@ -84,5 +87,30 @@ router.patch("/update-leave-status", user_validation_middleware, updateLeaveStat
 // Assign Leaves To The Users ::
 
 router.post("/assign-leaves-to-users", user_validation_middleware, assignPaidLeavesController);
+
+
+
+// User External Information Routes ::
+
+router.post(
+  "/add-user-external-information",
+  user_validation_middleware,
+  user_authorization("admin", "hr"),
+  add_user_external_information_controller,
+);
+
+router.patch(
+  "/update-user-external-information",
+  user_validation_middleware,
+  user_authorization("admin", "hr"),
+  update_user_external_information_controller,
+);
+
+router.delete(
+  "/delete-user-external-information",
+  user_validation_middleware,
+  user_authorization("admin", "hr"),
+  delete_user_external_information_controller,
+);
 
 export default router;

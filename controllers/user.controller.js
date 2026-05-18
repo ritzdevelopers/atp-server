@@ -2334,3 +2334,595 @@ export const unassign_ip_address_from_user_controller = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+/** Allowed values for `user_external_info.relation_blood_line` (must match DB ENUM). */
+const RELATION_BLOOD_LINE_VALUES = [
+  "father",
+  "mother",
+  "brother",
+  "sister",
+  "grandfather",
+  "grandmother",
+  "son",
+  "daughter",
+  "wife",
+  "husband",
+];
+
+function normalizeRelationBloodLine(value) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+  const s = String(value).trim().toLowerCase();
+  return RELATION_BLOOD_LINE_VALUES.includes(s) ? s : null;
+}
+
+const EXTERNAL_INFO_ACTIVITY_SQL =
+  "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+// User External Information Routes ::
+
+// Add user external information controller ::
+export const add_user_external_information_controller = async (req, res) => {
+  let connection;
+  try {
+    const {
+      user_id,
+      org_id,
+      emergency_contact_name,
+      emergency_number,
+      relation_blood_line,
+    } = req.body;
+    const { user_id: action_user_id } = req.user || {};
+
+    const isMissing = (v) =>
+      v === undefined || v === null || String(v).trim() === "";
+
+    if (!action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "action_user_id is required",
+      });
+    }
+
+    if (isMissing(user_id) || isMissing(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id and org_id are required",
+      });
+    }
+
+    if (
+      isMissing(emergency_contact_name) ||
+      isMissing(emergency_number) ||
+      isMissing(relation_blood_line)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "emergency_contact_name, emergency_number, and relation_blood_line are required",
+      });
+    }
+
+    const relationNorm = normalizeRelationBloodLine(relation_blood_line);
+    if (!relationNorm) {
+      return res.status(400).json({
+        success: false,
+        message: `relation_blood_line must be one of: ${RELATION_BLOOD_LINE_VALUES.join(", ")}`,
+      });
+    }
+
+    const contactName = String(emergency_contact_name).trim();
+    const contactNumber = String(emergency_number).trim();
+    if (contactName.length > 150) {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_contact_name must be at most 150 characters",
+      });
+    }
+    if (contactNumber.length > 20) {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_number must be at most 20 characters",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [employeeResult] = await connection.query(
+      "SELECT id FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    if (employeeResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const [employeeMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User is not a member of this organization",
+      });
+    }
+
+    const [actionMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [action_user_id, org_id],
+    );
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [orgResult] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+    if (orgResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
+    }
+
+    const [existingExternal] = await connection.query(
+      "SELECT id FROM user_external_info WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (existingExternal.length > 0) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        message:
+          "External information already exists for this user in this organization. Use update instead.",
+      });
+    }
+
+    const [insertResult] = await connection.query(
+      `INSERT INTO user_external_info 
+        (user_id, org_id, emergency_contact_name, emergency_number, relation_blood_line)
+       VALUES (?, ?, ?, ?, ?)`,
+      [user_id, org_id, contactName, contactNumber, relationNorm],
+    );
+
+    if (!insertResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save external information",
+      });
+    }
+
+    const newPayload = {
+      id: insertResult.insertId,
+      user_id,
+      org_id,
+      emergency_contact_name: contactName,
+      emergency_number: contactNumber,
+      relation_blood_line: relationNorm,
+    };
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        user_id,
+        org_id,
+        "ADD_USER_EXTERNAL_INFO",
+        null,
+        JSON.stringify(newPayload),
+        "User external emergency contact added",
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(201).json({
+      success: true,
+      message: "External information saved successfully",
+      data: newPayload,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("add_user_external_information_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Update user external information controller ::
+export const update_user_external_information_controller = async (req, res) => {
+  let connection;
+  try {
+    const {
+      user_id,
+      org_id,
+      emergency_contact_name,
+      emergency_number,
+      relation_blood_line,
+    } = req.body;
+    const { user_id: action_user_id } = req.user || {};
+
+    const isMissing = (v) =>
+      v === undefined || v === null || String(v).trim() === "";
+
+    if (!action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "action_user_id is required",
+      });
+    }
+
+    if (isMissing(user_id) || isMissing(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id and org_id are required",
+      });
+    }
+
+    const patchName =
+      emergency_contact_name !== undefined && emergency_contact_name !== null
+        ? String(emergency_contact_name).trim()
+        : undefined;
+    const patchNumber =
+      emergency_number !== undefined && emergency_number !== null
+        ? String(emergency_number).trim()
+        : undefined;
+    let patchRelation = undefined;
+    if (relation_blood_line !== undefined && relation_blood_line !== null) {
+      const r = normalizeRelationBloodLine(relation_blood_line);
+      if (!r) {
+        return res.status(400).json({
+          success: false,
+          message: `relation_blood_line must be one of: ${RELATION_BLOOD_LINE_VALUES.join(", ")}`,
+        });
+      }
+      patchRelation = r;
+    }
+
+    const hasPatch =
+      patchName !== undefined ||
+      patchNumber !== undefined ||
+      patchRelation !== undefined;
+
+    if (!hasPatch) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Provide at least one of: emergency_contact_name, emergency_number, relation_blood_line",
+      });
+    }
+
+    if (patchName !== undefined && patchName === "") {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_contact_name cannot be empty when provided",
+      });
+    }
+    if (patchNumber !== undefined && patchNumber === "") {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_number cannot be empty when provided",
+      });
+    }
+    if (patchName !== undefined && patchName.length > 150) {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_contact_name must be at most 150 characters",
+      });
+    }
+    if (patchNumber !== undefined && patchNumber.length > 20) {
+      return res.status(400).json({
+        success: false,
+        message: "emergency_number must be at most 20 characters",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [employeeResult] = await connection.query(
+      "SELECT id FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    if (employeeResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const [employeeMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User is not a member of this organization",
+      });
+    }
+
+    const [actionMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [action_user_id, org_id],
+    );
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [orgResult] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+    if (orgResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
+    }
+
+    const [existingRows] = await connection.query(
+      `SELECT id, user_id, org_id, emergency_contact_name, emergency_number, relation_blood_line
+       FROM user_external_info WHERE user_id = ? AND org_id = ?`,
+      [user_id, org_id],
+    );
+
+    if (existingRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "External information not found for this user and organization",
+      });
+    }
+
+    const previous = existingRows[0];
+
+    const nextName =
+      patchName !== undefined ? patchName : previous.emergency_contact_name;
+    const nextNumber =
+      patchNumber !== undefined ? patchNumber : previous.emergency_number;
+    const nextRelation =
+      patchRelation !== undefined ? patchRelation : previous.relation_blood_line;
+
+    const [updateResult] = await connection.query(
+      `UPDATE user_external_info SET
+        emergency_contact_name = ?,
+        emergency_number = ?,
+        relation_blood_line = ?
+       WHERE user_id = ? AND org_id = ?`,
+      [nextName, nextNumber, nextRelation, user_id, org_id],
+    );
+
+    if (!updateResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update external information",
+      });
+    }
+
+    const updatedPayload = {
+      id: previous.id,
+      user_id,
+      org_id,
+      emergency_contact_name: nextName,
+      emergency_number: nextNumber,
+      relation_blood_line: nextRelation,
+    };
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        user_id,
+        org_id,
+        "UPDATE_USER_EXTERNAL_INFO",
+        JSON.stringify(previous),
+        JSON.stringify(updatedPayload),
+        "User external emergency contact updated",
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "External information updated successfully",
+      data: updatedPayload,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("update_user_external_information_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+// Delete user external information controller ::
+export const delete_user_external_information_controller = async (req, res) => {
+  let connection;
+  try {
+    const { user_id, org_id } = req.body;
+    const { user_id: action_user_id } = req.user || {};
+
+    const isMissing = (v) =>
+      v === undefined || v === null || String(v).trim() === "";
+
+    if (!action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "action_user_id is required",
+      });
+    }
+
+    if (isMissing(user_id) || isMissing(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id and org_id are required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [employeeResult] = await connection.query(
+      "SELECT id FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    if (employeeResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const [employeeMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "User is not a member of this organization",
+      });
+    }
+
+    const [actionMemberResult] = await connection.query(
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [action_user_id, org_id],
+    );
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [orgResult] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+    if (orgResult.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
+    }
+
+    const [existingRows] = await connection.query(
+      `SELECT id, user_id, org_id, emergency_contact_name, emergency_number, relation_blood_line
+       FROM user_external_info WHERE user_id = ? AND org_id = ?`,
+      [user_id, org_id],
+    );
+
+    if (existingRows.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "External information not found for this user and organization",
+      });
+    }
+
+    const previous = existingRows[0];
+
+    const [deleteResult] = await connection.query(
+      "DELETE FROM user_external_info WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+
+    if (!deleteResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to delete external information",
+      });
+    }
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        user_id,
+        org_id,
+        "DELETE_USER_EXTERNAL_INFO",
+        JSON.stringify(previous),
+        null,
+        "User external emergency contact deleted",
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "External information deleted successfully",
+      data: { deleted_id: previous.id, user_id, org_id },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("delete_user_external_information_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};

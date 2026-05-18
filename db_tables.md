@@ -585,3 +585,149 @@ ADD CONSTRAINT fk_ip_assignment
 FOREIGN KEY (ip_id)
 REFERENCES organization_ips(id)
 ON DELETE CASCADE;
+
+
+
+CREATE TABLE employees_bank_info (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    account_holder_name VARCHAR(200) NOT NULL,
+    account_number VARCHAR(100) NOT NULL,
+    bank_name VARCHAR(250) NOT NULL,
+    bank_branch VARCHAR(250) NOT NULL,
+
+    ifsc_code VARCHAR(20) NOT NULL,
+    uan_number VARCHAR(50),
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_employee_bank_user
+    FOREIGN KEY (user_id)
+    REFERENCES apt_users(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_employee_bank_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT unique_user_bank_account
+    UNIQUE(user_id, org_id)
+);
+
+
+
+CREATE TABLE org_teams (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    org_id INT NOT NULL,
+    admin_id INT NOT NULL,
+    created_by INT NOT NULL,
+
+    team_name VARCHAR(150) NOT NULL,
+    team_info VARCHAR(350),
+
+    total_number_of_members INT DEFAULT 1,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_team_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_team_admin
+    FOREIGN KEY (admin_id)
+    REFERENCES apt_users(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_team_created_by
+    FOREIGN KEY (created_by)
+    REFERENCES apt_users(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT unique_team_name_per_org
+    UNIQUE(org_id, team_name)
+);
+
+
+CREATE TABLE team_members (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+    team_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    joined_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    leave_date TIMESTAMP NULL DEFAULT NULL,
+
+    CONSTRAINT fk_team_member_user
+    FOREIGN KEY (user_id)
+    REFERENCES apt_users(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_team_member_team
+    FOREIGN KEY (team_id)
+    REFERENCES org_teams(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_team_member_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT unique_user_team
+    UNIQUE(user_id, team_id)
+);
+
+
+CREATE TABLE user_external_info (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    emergency_contact_name VARCHAR(150) NOT NULL,
+
+    emergency_number VARCHAR(20) NOT NULL,
+
+    relation_blood_line ENUM(
+        'father',
+        'mother',
+        'brother',
+        'sister',
+        'grandfather',
+        'grandmother',
+        'son',
+        'daughter',
+        'wife',
+        'husband'
+    ) NOT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_external_user
+    FOREIGN KEY (user_id)
+    REFERENCES apt_users(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT fk_external_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id)
+    ON DELETE CASCADE,
+
+    CONSTRAINT unique_user_external_info
+    UNIQUE(user_id, org_id)
+);
