@@ -2926,3 +2926,10 @@ export const delete_user_external_information_controller = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+
+// User Reference Controller ::
+export const create_user_reference_controller = async (req, res) => { }
+export const update_user_reference_controller = async (req, res) => { } 
+export const get_all_user_references_controller = async (req, res) => { }
+export const get_single_user_reference_controller = async (req, res) => { }

@@ -2,7 +2,13 @@ import { Router } from "express";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import { getEmployeesFullInformationController, updateImageAndNameOfEmployeeController } from "../controllers/employees.controller.js";
 import {
+  getMyAttendanceQueriesController,
+  raiseAttendanceQueryController,
+  updateAttendanceQueryCorrectionController,
+} from "../controllers/leave.management.controller.js";
+import {
   addAttendanceLogController,
+  getMyLeaveQueriesController,
   leaveQueryController,
   markAttendanceController,
   markCheckOutAttendanceController,
@@ -29,5 +35,43 @@ router.post("/add-attendance-log", user_validation_middleware, addAttendanceLogC
 
 // Apply For Leave ::
 router.post("/apply-for-leave", user_validation_middleware, leaveQueryController);
+
+// My leave request history (current user, per org) ::
+router.post(
+  "/my-leave-queries",
+  user_validation_middleware,
+  getMyLeaveQueriesController,
+);
+router.get(
+  "/my-leave-queries",
+  user_validation_middleware,
+  getMyLeaveQueriesController,
+);
+
+// Attendance-related queries (punch corrections, etc.) — saved to attendance_related_queries
+router.post(
+  "/raise-attendance-query",
+  user_validation_middleware,
+  raiseAttendanceQueryController,
+);
+
+router.patch(
+  "/correct-attendance-query",
+  user_validation_middleware,
+  updateAttendanceQueryCorrectionController,
+);
+
+router.get(
+  "/my-attendance-queries",
+  user_validation_middleware,
+  getMyAttendanceQueriesController,
+);
+router.post(
+  "/my-attendance-queries",
+  user_validation_middleware,
+  getMyAttendanceQueriesController,
+);
+
+// 
 
 export default router;

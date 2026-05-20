@@ -13,6 +13,10 @@ import organizationFeaturesRoutes from "./routes/organization.features.routes.js
 import superAdminRoutes from "./routes/super-admin.routes.js";
 import attendanceHistoryRoutes from "./routes/attendance.history.routes.js";
 import employeeDocumentsRoutes from "./routes/employee.documents.routes.js";
+import employeeAssetsRoutes from "./routes/employee.assets.routes.js";
+import employeeReferencesRoutes from "./routes/employee.references.routes.js";
+import bankInfoRoutes from "./routes/bank.info.routes.js";
+import orgTeamsRoutes from "./routes/org.teams.route.js";
 dotenv.config();
 
 const app = express();
@@ -37,7 +41,7 @@ app.use(
 );
 app.use(express.json());
 
-app.get("/", (req, res) => { 
+app.get("/", (req, res) => {
   res.redirect("http://localhost:3001");
 });
 
@@ -75,6 +79,18 @@ app.use("/api/super-admin", superAdminRoutes);
 
 // Cloud Routes ::
 app.use("/api/employee-documents", employeeDocumentsRoutes);
+
+// Employee assets (hardware / access assignments)
+app.use("/api/employee-assets", employeeAssetsRoutes);
+
+// Employee references (referrer per employee — UNIQUE employee_id + org_id)
+app.use("/api/employee-references", employeeReferencesRoutes);
+
+// Employee bank details (UNIQUE user_id + org_id)
+app.use("/api/employee-bank-info", bankInfoRoutes);
+
+// Organization teams (create, members, listing)
+app.use("/api/org-teams", orgTeamsRoutes);
 
 app.listen(3000, () => {
   db.connect();

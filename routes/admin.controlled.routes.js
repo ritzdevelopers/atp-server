@@ -14,8 +14,16 @@ import {
 } from "../controllers/user.controller.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import user_authorization from "../middlewares/user_authorization.js";
-import { getAllLeavesController, updateLeaveStatusController } from "../controllers/leave.management.controller.js";
-import { assignPaidLeavesController } from "../controllers/attendance.controller.js";
+import {
+  getAllAttendanceQueriesController,
+  getAllLeavesController,
+  updateAttendanceQueryStatusController,
+  updateLeaveStatusController,
+} from "../controllers/leave.management.controller.js";
+import {
+  assignPaidLeavesController,
+  leaveResponseController,
+} from "../controllers/attendance.controller.js";
 const router = Router();
 
 // Create Employee Route :: It Will Be Used By Admin Only
@@ -83,6 +91,31 @@ router.get(
 
 router.get("/get-all-leaves", user_validation_middleware, getAllLeavesController);
 router.patch("/update-leave-status", user_validation_middleware, updateLeaveStatusController);
+
+/** List attendance-related queries for an org (optional team_id and filters). */
+router.get(
+  "/get-all-attendance-queries",
+  user_validation_middleware,
+  user_authorization("admin", "hr", "manager"),
+  getAllAttendanceQueriesController,
+);
+
+/** Approve or reject attendance-related query (attendance_related_queries). */
+router.patch(
+  "/update-attendance-query-status",
+  user_validation_middleware,
+  user_authorization("admin", "hr", "manager"),
+  updateAttendanceQueryStatusController,
+);
+
+/** Approve or reject a pending leave request (admin, HR, manager). */
+router.post(
+  "/respond-to-leave",
+  user_validation_middleware,
+  user_authorization("admin", "hr", "manager"),
+  leaveResponseController,
+);
+
 
 // Assign Leaves To The Users ::
 

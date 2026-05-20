@@ -670,6 +670,8 @@ CREATE TABLE team_members (
 
     leave_date TIMESTAMP NULL DEFAULT NULL,
 
+
+
     CONSTRAINT fk_team_member_user
     FOREIGN KEY (user_id)
     REFERENCES apt_users(id)
@@ -689,6 +691,20 @@ CREATE TABLE team_members (
     UNIQUE(user_id, team_id)
 );
 
+ALTER TABLE team_members
+ADD COLUMN added_by_id INT NULL,
+ADD column added_by_name varchar(250),
+
+ADD COLUMN removed_by_id INT NULL,
+add column removed_by_name varchar(250),
+
+ADD CONSTRAINT fk_team_member_added_by
+FOREIGN KEY (added_by_id)
+REFERENCES apt_users(id),
+
+ADD CONSTRAINT fk_team_member_removed_by
+FOREIGN KEY (removed_by_id)
+REFERENCES apt_users(id);
 
 CREATE TABLE user_external_info (
     id INT PRIMARY KEY AUTO_INCREMENT,
@@ -730,4 +746,161 @@ CREATE TABLE user_external_info (
 
     CONSTRAINT unique_user_external_info
     UNIQUE(user_id, org_id)
+);
+
+
+CREATE TABLE employee_references (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    referred_by_id INT NOT NULL,
+    referred_by_name VARCHAR(200),
+
+    referred_by_designation_id INT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_reference_employee
+    FOREIGN KEY (employee_id)
+    REFERENCES apt_users(id),
+
+    CONSTRAINT fk_reference_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    CONSTRAINT fk_reference_referred_by
+    FOREIGN KEY (referred_by_id)
+    REFERENCES apt_users(id),
+
+    CONSTRAINT fk_reference_designation
+    FOREIGN KEY (referred_by_designation_id)
+    REFERENCES apt_roles(id)
+    ON DELETE SET NULL,
+
+    CONSTRAINT unique_employee_reference
+    UNIQUE(employee_id, org_id)
+);
+
+
+CREATE TABLE employee_assets (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    asset_given_by_id INT NOT NULL,
+
+    asset_name VARCHAR(250) NOT NULL,
+
+    asset_summary VARCHAR(600),
+
+    asset_type ENUM(
+        'laptop',
+        'mobile',
+        'software',
+        'email',
+        'sim',
+        'id_card',
+        'monitor',
+        'access_card',
+        'other'
+    ) NOT NULL,
+
+    asset_image_url TEXT,
+
+    asset_status ENUM(
+        'active',
+        'returned',
+        'damaged',
+        'lost'
+    ) DEFAULT 'active',
+
+    is_returned BOOLEAN DEFAULT FALSE,
+
+    returned_to_id INT NULL,
+
+    handover_date_time DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_asset_employee
+    FOREIGN KEY (employee_id)
+    REFERENCES apt_users(id),
+
+    CONSTRAINT fk_asset_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    CONSTRAINT fk_asset_given_by
+    FOREIGN KEY (asset_given_by_id)
+    REFERENCES apt_users(id),
+
+    CONSTRAINT fk_asset_returned_to
+    FOREIGN KEY (returned_to_id)
+    REFERENCES apt_users(id)
+);
+
+ALTER TABLE leave_quiry 
+ADD COLUMN team_id INT NULL;
+
+ALTER TABLE leave_quiry
+ADD CONSTRAINT lq_team_fk
+FOREIGN KEY (team_id) REFERENCES org_teams(id);
+
+
+
+CREATE TABLE attendance_related_queries (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+    team_id INT,
+
+    query_status ENUM(
+        'pending',
+        'approved',
+        'rejected'
+    ) DEFAULT 'pending',
+
+    category ENUM(
+        'forget_punch_in',
+        'forget_punch_out',
+        'late_punch_in'
+    ) NOT NULL,
+
+    query_message TEXT NOT NULL,
+
+    attendance_date DATE NOT NULL,
+
+    approved_by INT NULL,
+    approved_by_name VARCHAR(200) NULL,
+
+    admin_response TEXT NULL,
+
+    resolved_at DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id)
+    REFERENCES apt_users(id),
+
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    FOREIGN KEY (team_id)
+    REFERENCES org_teams(id),
+
+    FOREIGN KEY (approved_by)
+    REFERENCES apt_users(id)
 );

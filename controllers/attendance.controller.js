@@ -2281,8 +2281,8 @@ function clampPaidLeaveNumbers(totalNum, usedNum) {
 // Leave Query Controller *Uses By Employees ::
 export const leaveQueryController = async (req, res) => {
   const { user_id, user_email } = req.user;
-  const { org_id, leave_type, start_date, end_date, reason } = req.body;
-
+  const { org_id, leave_type, start_date, end_date, reason, team_id } = req.body;
+  console.log("This is team_id", team_id);
   if (!user_id || !user_email) {
     return res.status(400).json({
       message: "User ID and email are required",
@@ -2359,8 +2359,8 @@ export const leaveQueryController = async (req, res) => {
     const [insertResult] = await connection.query(
       `INSERT INTO leave_quiry (
         user_id, user_name, user_email, org_id,
-        leave_type, start_date, end_date, reason, status
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
+        leave_type, start_date, end_date, reason, status, team_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       [
         user_id,
         user_name,
@@ -2370,6 +2370,7 @@ export const leaveQueryController = async (req, res) => {
         startNorm,
         endNorm,
         reason != null && reason !== "" ? String(reason) : null,
+        team_id != null && team_id !== "" ? Number(team_id) : null,
       ],
     );
 
@@ -2387,6 +2388,83 @@ export const leaveQueryController = async (req, res) => {
     if (connection) connection.release();
   }
 };
+
+// Get My Leave Queries Controller *Uses By Employees ::
+export const getMyLeaveQueriesController = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const org_id = req.body?.org_id ?? req.query?.org_id;
+
+    if (!user_id) {
+      return res.status(400).json({
+        message: "user_id is required",
+      });
+    }
+
+    if (org_id == null || org_id === "") {
+      return res.status(400).json({
+        message: "org_id is required",
+      });
+    }
+
+    const orgIdNum = Number(org_id);
+    if (!Number.isFinite(orgIdNum)) {
+      return res.status(400).json({ message: "org_id must be a valid number" });
+    }
+
+    const [orgRows] = await db.promise().query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [orgIdNum],
+    );
+    if (orgRows.length === 0) {
+      return res.status(404).json({ message: "Organization not found" });
+    }
+
+    const [memberRows] = await db.promise().query(
+      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      [user_id, orgIdNum],
+    );
+    if (memberRows.length === 0) {
+      return res
+        .status(403)
+        .json({ message: "User not part of this organization" });
+    }
+
+    const [rows] = await db.promise().query(
+      `SELECT
+        lq.id,
+        lq.user_id,
+        lq.user_name,
+        lq.user_email,
+        lq.org_id,
+        lq.leave_type,
+        lq.start_date,
+        lq.end_date,
+        lq.reason,
+        lq.status,
+        lq.approved_by,
+        approver.user_name AS approved_by_name,
+        lq.team_id,
+        lq.created_at,
+        lq.updated_at
+      FROM leave_quiry lq
+      LEFT JOIN apt_users approver ON lq.approved_by = approver.id
+      WHERE lq.user_id = ? AND lq.org_id = ?
+      ORDER BY lq.created_at DESC, lq.id DESC`,
+      [user_id, orgIdNum],
+    );
+
+    return res.status(200).json({
+      message: "Leave requests fetched successfully",
+      data: rows,
+      count: rows.length,
+    });
+  } catch (error) {
+    console.error("getMyLeaveQueriesController:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 
 // Update Leave Query Controller *Uses By Employees ::
 export const updateLeaveQueryController = async (req, res) => {
