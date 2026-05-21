@@ -904,3 +904,104 @@ CREATE TABLE attendance_related_queries (
     FOREIGN KEY (approved_by)
     REFERENCES apt_users(id)
 );
+
+
+CREATE TABLE employee_exit_process (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+    team_id INT,
+
+    action_type ENUM(
+        'resignation',
+        'termination'
+    ) NOT NULL,
+
+    action_reason TEXT NOT NULL,
+
+    application_status ENUM(
+        'pending',
+        'approved',
+        'rejected',
+        'in_progress'
+    ) DEFAULT 'pending',
+
+    exit_date DATE NULL,
+    last_working_day DATE NULL,
+
+    action_performed_by INT NULL,
+    response_by_id INT NULL,
+
+    response_message TEXT NULL,
+
+    resolved_at DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (employee_id)
+    REFERENCES apt_users(id),
+
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    FOREIGN KEY (team_id)
+    REFERENCES org_teams(id),
+
+    FOREIGN KEY (action_performed_by)
+    REFERENCES apt_users(id),
+
+    FOREIGN KEY (response_by_id)
+    REFERENCES apt_users(id)
+);
+
+CREATE TABLE handover_query (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+    team_id INT,
+
+    asset_id INT NULL,
+
+    custom_task_name VARCHAR(250) NULL,
+
+    manager_id INT NOT NULL,
+
+    handover_status ENUM(
+        'pending',
+        'handover_completed',
+        'damaged',
+        'missing'
+    ) DEFAULT 'pending',
+
+    remarks TEXT NULL,
+
+    handover_date DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (employee_id)
+    REFERENCES apt_users(id),
+
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    FOREIGN KEY (team_id)
+    REFERENCES org_teams(id),
+
+    FOREIGN KEY (manager_id)
+    REFERENCES apt_users(id),
+
+    FOREIGN KEY (asset_id)
+    REFERENCES employee_assets(id)
+);
+
+ALTER TABLE handover_query ADD column employee_exit_process_id int,
+add constraint emp_ex_pr_frgn_key foreign key (employee_exit_process_id) references employee_exit_process(id);

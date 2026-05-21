@@ -121,8 +121,6 @@ router.post(
 
 router.post("/assign-leaves-to-users", user_validation_middleware, assignPaidLeavesController);
 
-
-
 // User External Information Routes ::
 
 router.post(
