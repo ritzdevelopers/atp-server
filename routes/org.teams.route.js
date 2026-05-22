@@ -10,6 +10,7 @@ import {
   get_single_org_team_controller,
   get_single_org_team_member_controller,
   get_team_activity_feed_controller,
+  get_team_member_exit_process_reports_controller,
 } from "../controllers/org_team.controller.js";
 
 const router = express.Router();
@@ -55,6 +56,12 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   get_team_activity_feed_controller,
+);
+router.get(
+  "/exit-process-report/:employee_id",
+  user_validation_middleware,
+  req_sender_auth,
+  get_team_member_exit_process_reports_controller,
 );
 router.get(
   "/get-all-teams",

@@ -1668,6 +1668,40 @@ export const get_team_activity_feed_controller = async (req, res) => {
       "REMOVE_MEMBER_FROM_TEAM",
     ];
 
+    const [exitProcessRows] = await db.promise().query(
+      `
+      SELECT
+        ee.id,
+        ee.employee_id,
+        ee.action_type,
+        ee.exit_date,
+        ee.last_working_day,
+        au.user_name AS employee_name,
+        au.user_email AS employee_email,
+        ap.user_name AS action_performed_by_name
+      FROM employee_exit_process ee
+      LEFT JOIN apt_users au ON au.id = ee.employee_id
+      LEFT JOIN apt_users ap ON ap.id = ee.action_performed_by
+      WHERE ee.team_id = ?
+        AND ee.org_id = ?
+        AND ee.application_status = 'in_progress'
+      ORDER BY ee.updated_at DESC
+      `,
+      [team_id, org_id],
+    );
+
+    const exit_processes_reports = Array.isArray(exitProcessRows)
+      ? exitProcessRows.map((row) => ({
+          id: row.id,
+          employee_id: row.employee_id,
+          action_type: row.action_type ?? null,
+          exit_date: row.exit_date ?? null,
+          last_working_day: row.last_working_day ?? null,
+          employee_name: row.employee_name ?? null,
+          employee_email: row.employee_email ?? null,
+          action_performed_by_name: row.action_performed_by_name ?? null,
+        }))
+      : [];
     const [rows] = await db.promise().query(
       `
       SELECT
@@ -1679,6 +1713,7 @@ export const get_team_activity_feed_controller = async (req, res) => {
         l.new_value,
         l.action_reason,
         l.created_at,
+        
         p.user_name AS performed_by_name,
         a.user_name AS affected_user_name
       FROM apt_user_activity_logs l
@@ -1751,10 +1786,174 @@ export const get_team_activity_feed_controller = async (req, res) => {
     return res.status(200).json({
       success: true,
       message: "Team activity loaded",
-      data: { notifications, leave_queries },
+      data: {
+        notifications,
+        leave_queries,
+        exit_processes_reports,
+      },
     });
   } catch (error) {
     console.error("Error getting team activity feed:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  }
+};
+
+export const get_team_member_exit_process_reports_controller = async (
+  req,
+  res,
+) => {
+  try {
+    const { org_id } = req;
+    const { user_id: manager_id } = req.user;
+    const { employee_id } = req.params;
+
+    if (!org_id || !manager_id || !employee_id) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "org_id, manager_id and employee_id are required",
+      });
+    }
+
+    // ---------------------------------------------------
+    // GET EXIT PROCESS REPORTS
+    // ---------------------------------------------------
+
+    const query = `
+      SELECT
+        ep.*,
+
+        org.user_id AS member_user_id,
+
+        ut.joined_date AS team_joining_date,
+        ut.team_id AS team_id,
+
+        tm.team_name AS team_name,
+        tm.admin_id AS team_admin_id,
+
+        hq.id AS handover_query_id,
+        hq.asset_id,
+        hq.custom_task_name,
+        hq.handover_status,
+        hq.remarks,
+        hq.handover_date,
+        hq.created_at AS handover_created_at,
+
+        user.user_name AS employee_name,
+        user.user_email AS employee_email,
+        user.user_phone AS employee_phone
+
+      FROM employee_exit_process ep
+
+      INNER JOIN apt_org_members org
+      ON org.org_id = ep.org_id
+      AND org.user_id = ep.employee_id
+
+      INNER JOIN team_members ut
+      ON ut.user_id = ep.employee_id
+      AND ut.org_id = ep.org_id
+      AND ut.team_id = ep.team_id
+
+      INNER JOIN org_teams tm
+      ON tm.id = ut.team_id
+      AND tm.org_id = ut.org_id
+
+      LEFT JOIN handover_query hq
+      ON hq.employee_id = ep.employee_id
+      AND hq.org_id = ep.org_id
+      AND hq.team_id = ep.team_id
+
+      INNER JOIN apt_users user
+      ON user.id = ep.employee_id
+
+      WHERE ep.employee_id = ?
+      AND ep.org_id = ?
+    `;
+
+    const [rows] = await db
+      .promise()
+      .query(query, [employee_id, org_id]);
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Exit process reports not found",
+      });
+    }
+
+    // ---------------------------------------------------
+    // FORMAT RESPONSE
+    // ---------------------------------------------------
+
+    const formattedData = {
+      exit_process: {
+        exit_process_id: rows[0].id,
+        employee_id: rows[0].employee_id,
+        employee_name: rows[0].employee_name,
+        employee_email: rows[0].employee_email,
+        employee_phone: rows[0].employee_phone,
+
+        org_id: rows[0].org_id,
+
+        team_id: rows[0].team_id,
+        team_name: rows[0].team_name,
+        team_admin_id: rows[0].team_admin_id,
+
+        application_status:
+          rows[0].application_status,
+
+        response_message:
+          rows[0].response_message,
+
+        resolved_at: rows[0].resolved_at,
+
+        created_at: rows[0].created_at,
+
+        updated_at: rows[0].updated_at ?? null,
+
+        action_type: rows[0].action_type ?? null,
+        action_reason: rows[0].action_reason ?? null,
+        exit_date: rows[0].exit_date ?? null,
+        last_working_day: rows[0].last_working_day ?? null,
+
+        team_joining_date:
+          rows[0].team_joining_date,
+      },
+
+      handover_queries: (() => {
+        const byId = new Map();
+        for (const item of rows) {
+          const hid = item.handover_query_id;
+          if (hid == null || byId.has(hid)) continue;
+          byId.set(hid, {
+            handover_query_id: hid,
+            asset_id: item.asset_id ?? null,
+            custom_task_name: item.custom_task_name ?? null,
+            handover_status: item.handover_status ?? null,
+            remarks: item.remarks ?? null,
+            handover_date: item.handover_date ?? null,
+            created_at: item.handover_created_at ?? null,
+          });
+        }
+        return [...byId.values()];
+      })(),
+    };
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Exit process reports fetched successfully",
+      data: formattedData,
+    });
+  } catch (error) {
+    console.error(
+      "Error getting team member exit process reports:",
+      error,
+    );
 
     return res.status(500).json({
       success: false,

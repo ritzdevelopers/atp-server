@@ -1,4 +1,6 @@
 import { pool } from "../db/connect.js";
+import exit_confirmation from "../utils/exit_confirmation.js";
+import exit_process_handler from "../utils/exit_in_process.js";
 
 const EXIT_PROCESS_STATUSES = [
   "pending",
@@ -385,149 +387,127 @@ export const create_employee_exit_process = async (req, res) => {
   }
 };
 
-export const update_employee_exit_process_status = async (req, res) => {
+export const exit_in_process = async (req, res) => {
   let connection;
 
   try {
-    const { user_id: response_by_id } = req.user;
-    const { org_id } = req;
-    const { id: exit_process_id } = req.params;
+    const { user_id: action_performed_by_id } = req.user;
 
-    const {
-      application_status,
-      exit_date,
-      last_working_day,
-      response_message,
-      resolved_at,
-      assets_handover_to_id,
-    } = req.body;
+    const { org_id } = req;
+
+    const { exit_process_id } = req.params;
+
+    const { assets_handover_data, application_status } = req.body;
 
     // ---------------------------------------------------
     // VALIDATIONS
     // ---------------------------------------------------
 
-    if (!response_by_id) {
+    if (!action_performed_by_id) {
       return res.status(400).json({
         success: false,
-        message: "response_by_id is required",
+        message: "Action performer id is required",
       });
     }
 
     if (!org_id) {
       return res.status(400).json({
         success: false,
-        message: "org_id is required",
+        message: "Organization id is required",
       });
     }
 
     if (!exit_process_id) {
       return res.status(400).json({
         success: false,
-        message: "exit_process_id is required",
+        message: "Exit process id is required",
       });
     }
 
-    if (!application_status) {
+    if (!assets_handover_data || !Array.isArray(assets_handover_data)) {
       return res.status(400).json({
         success: false,
-        message: "application_status is required",
+        message: "assets_handover_data must be an array",
       });
     }
-    if (application_status === "approved") {
-    } else if (application_status === "in_progress") {
-    }
 
-    const normalizedStatus = String(application_status).trim().toLowerCase();
-
-    if (!EXIT_PROCESS_STATUSES.includes(normalizedStatus)) {
+    if (application_status !== "in_progress") {
       return res.status(400).json({
         success: false,
-        message:
-          "application_status must be pending, approved, rejected or in_progress",
+        message: "application_status must be in_progress",
       });
     }
 
     // ---------------------------------------------------
-    // DATE VALIDATION
+    // DB CONNECTION
     // ---------------------------------------------------
-
-    if (
-      exit_date &&
-      last_working_day &&
-      new Date(last_working_day) > new Date(exit_date)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: "exit_date must be after last_working_day",
-      });
-    }
 
     connection = await pool.promise().getConnection();
 
     await connection.beginTransaction();
 
     // ---------------------------------------------------
-    // Check If response_by_id is valid member
+    // CHECK ACTION PERFORMER MEMBERSHIP
     // ---------------------------------------------------
 
-    const [responseUser] = await connection.query(
+    const [actionUser] = await connection.query(
       `
-        SELECT id, user_name
+        SELECT *
         FROM apt_org_members
         WHERE org_id = ?
         AND user_id = ?
         `,
-      [org_id, response_by_id],
+      [org_id, action_performed_by_id],
     );
 
-    if (responseUser.length === 0) {
+    if (actionUser.length === 0) {
       await connection.rollback();
 
       return res.status(403).json({
         success: false,
-        message: "Response user is not a member of this organization",
+        message: "You are not a member of this organization",
       });
     }
 
-    const response_by_name = responseUser[0].user_name;
-
     // ---------------------------------------------------
-    // Check If Organization Exists
+    // GET ACTION USER NAME
     // ---------------------------------------------------
 
-    const [organization] = await connection.query(
+    const [actionUserName] = await connection.query(
       `
-        SELECT id
-        FROM apt_organizations
+        SELECT user_name
+        FROM apt_users
         WHERE id = ?
         `,
-      [org_id],
+      [action_performed_by_id],
     );
 
-    if (organization.length === 0) {
+    if (actionUserName.length === 0) {
       await connection.rollback();
 
       return res.status(404).json({
         success: false,
-        message: "Organization not found",
+        message: "Action performer not found",
       });
     }
 
+    const action_user_name = actionUserName[0].user_name;
+
     // ---------------------------------------------------
-    // Check If Exit Process Exists
+    // CHECK EXIT PROCESS EXISTS
     // ---------------------------------------------------
 
-    const [existingProcessRows] = await connection.query(
+    const [exitProcess] = await connection.query(
       `
-          SELECT *
-          FROM employee_exit_process
-          WHERE id = ?
-          AND org_id = ?
-          `,
+        SELECT *
+        FROM employee_exit_process
+        WHERE id = ?
+        AND org_id = ?
+        `,
       [exit_process_id, org_id],
     );
 
-    if (existingProcessRows.length === 0) {
+    if (exitProcess.length === 0) {
       await connection.rollback();
 
       return res.status(404).json({
@@ -536,111 +516,101 @@ export const update_employee_exit_process_status = async (req, res) => {
       });
     }
 
-    const existingProcess = existingProcessRows[0];
+    const existingExitProcess = exitProcess[0];
 
-    // ---------------------------------------------------
-    // Prevent duplicate status update
-    // ---------------------------------------------------
+    const employee_id = existingExitProcess.employee_id;
 
-    if (existingProcess.application_status === normalizedStatus) {
+    const normalizedExistingExitStatus = String(
+      existingExitProcess.application_status ?? "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (
+      normalizedExistingExitStatus !== "pending" &&
+      normalizedExistingExitStatus !== "in_progress"
+    ) {
       await connection.rollback();
 
       return res.status(400).json({
         success: false,
-        message: "Application status is already updated",
+        message:
+          "Asset handovers can only be submitted when exit is pending or in progress",
       });
     }
 
     // ---------------------------------------------------
-    // FINAL VALUES
+    // CALL EXIT PROCESS HANDLER (exit_in_process.js)
     // ---------------------------------------------------
 
-    const final_exit_date = exit_date || existingProcess.exit_date;
-
-    const final_last_working_day =
-      last_working_day || existingProcess.last_working_day;
-
-    const final_response_message =
-      response_message !== undefined
-        ? response_message
-        : existingProcess.response_message;
-
-    const final_resolved_at =
-      resolved_at ||
-      (normalizedStatus === "approved" || normalizedStatus === "rejected"
-        ? new Date()
-        : existingProcess.resolved_at);
-
-    // ---------------------------------------------------
-    // UPDATE EXIT PROCESS
-    // ---------------------------------------------------
-
-    const [updateResult] = await connection.query(
-      `
-          UPDATE employee_exit_process
-          SET
-            application_status = ?,
-            exit_date = ?,
-            last_working_day = ?,
-            response_message = ?,
-            response_by_id = ?,
-            resolved_at = ?
-          WHERE id = ?
-          AND org_id = ?
-          `,
-      [
-        normalizedStatus,
-        final_exit_date || null,
-        final_last_working_day || null,
-        final_response_message || null,
-        response_by_id,
-        final_resolved_at || null,
-        exit_process_id,
-        org_id,
-      ],
+    const processResponse = await exit_process_handler(
+      employee_id,
+      org_id,
+      assets_handover_data,
     );
 
-    if (updateResult.affectedRows < 1) {
+    if (!processResponse.success) {
       await connection.rollback();
 
-      return res.status(400).json({
+      return res.status(processResponse.status || 400).json({
         success: false,
-        message: "Failed to update employee exit process",
+        message: processResponse.message,
+        data: processResponse.data,
       });
+    }
+
+    const alreadyInProgress = normalizedExistingExitStatus === "in_progress";
+
+    // ---------------------------------------------------
+    // UPDATE APPLICATION STATUS (pending → in_progress first time only)
+    // ---------------------------------------------------
+
+    if (!alreadyInProgress) {
+      const [updateResult] = await connection.query(
+        `
+        UPDATE employee_exit_process
+        SET
+          application_status = ?
+        WHERE id = ?
+        `,
+        [application_status, exit_process_id],
+      );
+
+      if (updateResult.affectedRows < 1) {
+        await connection.rollback();
+
+        return res.status(400).json({
+          success: false,
+          message: "Failed to update application status",
+        });
+      }
     }
 
     // ---------------------------------------------------
     // SAVE ACTIVITY LOG
     // ---------------------------------------------------
 
-    const updatedPayload = {
-      id: existingProcess.id,
-      employee_id: existingProcess.employee_id,
-      org_id: existingProcess.org_id,
-      team_id: existingProcess.team_id,
-      application_status: normalizedStatus,
-      exit_date: final_exit_date,
-      last_working_day: final_last_working_day,
-      response_message: final_response_message,
-      response_by_id,
-      resolved_at: final_resolved_at,
+    const activityPayload = {
+      exit_process_id,
+      employee_id,
+      org_id,
+      application_status,
+      assets_handover_data,
+      already_in_progress: alreadyInProgress,
     };
 
-    const activity_reason = `
-        Employee exit process status updated from
-        ${existingProcess.application_status}
-        to ${normalizedStatus}
-        by ${response_by_name}
-      `;
-
     const [activityResult] = await connection.query(INSERT_ACTIVITY_SQL, [
-      response_by_id,
-      existingProcess.employee_id,
+      action_performed_by_id,
+      employee_id,
       org_id,
-      "UPDATE_EMPLOYEE_EXIT_PROCESS_STATUS",
-      JSON.stringify(existingProcess),
-      JSON.stringify(updatedPayload),
-      activity_reason.trim(),
+      alreadyInProgress
+        ? "EMPLOYEE_EXIT_ASSET_HANDOVER_IN_PROGRESS"
+        : "UPDATE_EMPLOYEE_EXIT_PROCESS_APPLICATION_STATUS",
+      JSON.stringify(existingExitProcess),
+      JSON.stringify(activityPayload),
+      alreadyInProgress
+        ? `Employee exit assets handed over (${assets_handover_data.length} asset(s)) by ${action_user_name} while in progress`
+        : `Employee exit process application status updated to ${application_status} by ${action_user_name}`,
     ]);
 
     if (activityResult.affectedRows < 1) {
@@ -659,12 +629,577 @@ export const update_employee_exit_process_status = async (req, res) => {
     await connection.commit();
 
     // ---------------------------------------------------
+    // RETURN RESPONSE
+    // ---------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message: alreadyInProgress
+        ? "Asset handover recorded successfully"
+        : "Employee exit process moved to in_progress successfully",
+      data: {
+        exit_process_id,
+        employee_id,
+        application_status: alreadyInProgress
+          ? existingExitProcess.application_status
+          : application_status,
+        assets_handover_data,
+      },
+    });
+  } catch (error) {
+    console.error("Error in exit_in_process:", error);
+
+    if (connection) {
+      await connection.rollback();
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+export const exit_completed = async (req, res) => {
+  let connection;
+
+  try {
+    connection = await pool.promise().getConnection();
+
+    const { user_id: action_performed_by_id } = req.user;
+
+    const { org_id } = req;
+
+    const { exit_process_id } = req.params;
+
+    const { application_status, employee_id, response_message } = req.body;
+
+    // ---------------------------------------------------
+    // VALIDATIONS
+    // ---------------------------------------------------
+
+    if (!action_performed_by_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Action performer id is required",
+      });
+    }
+
+    if (!org_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization id is required",
+      });
+    }
+
+    if (!exit_process_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Exit process id is required",
+      });
+    }
+
+    if (!employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee id is required",
+      });
+    }
+
+    if (!employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee id is required",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK ACTION PERFORMER MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [actionUser] = await connection.query(
+      `
+      SELECT *
+      FROM apt_org_members
+      WHERE org_id = ?
+      AND user_id = ?
+      `,
+      [org_id, action_performed_by_id],
+    );
+
+    if (actionUser.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // GET ACTION USER NAME
+    // ---------------------------------------------------
+
+    const [actionUserName] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [action_performed_by_id],
+    );
+
+    if (actionUserName.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Action performer not found",
+      });
+    }
+
+    const action_user_name = actionUserName[0].user_name;
+
+    // ---------------------------------------------------
+    // CHECK EMPLOYEE EXISTS
+    // ---------------------------------------------------
+
+    const [employee] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [employee_id],
+    );
+
+    if (employee.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    const employee_name = employee[0].user_name;
+
+    // ---------------------------------------------------
+    // CHECK EMPLOYEE MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [validMember] = await connection.query(
+      `
+      SELECT *
+      FROM apt_org_members
+      WHERE org_id = ?
+      AND user_id = ?
+      `,
+      [org_id, employee_id],
+    );
+
+    if (validMember.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Employee is not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK EXIT PROCESS
+    // ---------------------------------------------------
+
+    const [exitProcess] = await connection.query(
+      `
+      SELECT *
+      FROM employee_exit_process
+      WHERE id = ?
+      AND org_id = ?
+      AND employee_id = ?
+      `,
+      [exit_process_id, org_id, employee_id],
+    );
+
+    if (exitProcess.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Exit process not found",
+      });
+    }
+
+    const exitProcessData = exitProcess[0];
+
+    // ---------------------------------------------------
+    // PREVENT DUPLICATE COMPLETION
+    // ---------------------------------------------------
+
+    if (exitProcessData.application_status === "handover_completed") {
+      return res.status(400).json({
+        success: false,
+        message: "Exit process already completed",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK EXIT CONFIRMATION
+    // ---------------------------------------------------
+
+    const result = await exit_confirmation(employee_id, org_id);
+
+    if (!result.success) {
+      return res.status(400).json({
+        success: false,
+        message: result.message,
+        data: result.data || null,
+      });
+    }
+
+    // ---------------------------------------------------
+    // UPDATE APPLICATION STATUS
+    // ---------------------------------------------------
+
+    const [updateResult] = await connection.query(
+      `
+      UPDATE employee_exit_process
+      SET
+        application_status = ?,
+        resolved_at = NOW(),
+        response_message = ?,
+        response_by = ?
+      WHERE id = ?
+      AND org_id = ?
+      AND employee_id = ?
+      `,
+      [
+        application_status,
+        response_message,
+        action_performed_by_id,
+        exit_process_id,
+        org_id,
+        employee_id,
+      ],
+    );
+
+    if (updateResult.affectedRows < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update application status",
+      });
+    }
+
+    // ---------------------------------------------------
+    // SAVE ACTIVITY LOG
+    // ---------------------------------------------------
+
+    const updatedPayload = {
+      exit_process_id,
+      employee_id,
+      org_id,
+      application_status,
+      response_message,
+      response_by: action_performed_by_id,
+    };
+
+    const [activityResult] = await connection.query(INSERT_ACTIVITY_SQL, [
+      action_performed_by_id,
+      employee_id,
+      org_id,
+      "EXIT_CONFIRMATION",
+      JSON.stringify(exitProcessData),
+      JSON.stringify(updatedPayload),
+      `Exit process completed by ${action_user_name} for employee ${employee_name}`,
+    ]);
+
+    if (activityResult.affectedRows < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    // ---------------------------------------------------
     // RESPONSE
     // ---------------------------------------------------
 
     return res.status(200).json({
       success: true,
-      message: "Employee exit process status updated successfully",
+      message: "Exit process completed successfully",
+      data: updatedPayload,
+    });
+  } catch (error) {
+    console.error("Error in exit_completed:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+export const exit_cancelled = async (req, res) => {
+  let connection;
+
+  try {
+    const { user_id: action_performed_by_id } = req.user;
+
+    const { org_id } = req;
+
+    const { exit_process_id } = req.params;
+
+    const { application_status, employee_id, response_message } = req.body;
+
+    // ---------------------------------------------------
+    // VALIDATIONS
+    // ---------------------------------------------------
+
+    if (!action_performed_by_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Action performer id is required",
+      });
+    }
+
+    if (!org_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization id is required",
+      });
+    }
+
+    if (!exit_process_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Exit process id is required",
+      });
+    }
+
+    if (!employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Employee id is required",
+      });
+    }
+
+    if (!application_status) {
+      return res.status(400).json({
+        success: false,
+        message: "Application status is required",
+      });
+    }
+
+    if (!response_message) {
+      return res.status(400).json({
+        success: false,
+        message: "Response message is required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+
+    await connection.beginTransaction();
+
+    // ---------------------------------------------------
+    // CHECK ACTION USER MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [actionUser] = await connection.query(
+      `
+      SELECT *
+      FROM apt_org_members
+      WHERE org_id = ?
+      AND user_id = ?
+      `,
+      [org_id, action_performed_by_id],
+    );
+
+    if (actionUser.length === 0) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message: "You are not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // GET ACTION USER NAME
+    // ---------------------------------------------------
+
+    const [actionUserName] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [action_performed_by_id],
+    );
+
+    if (actionUserName.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Action performer not found",
+      });
+    }
+
+    const action_user_name = actionUserName[0].user_name;
+
+    // ---------------------------------------------------
+    // CHECK EMPLOYEE
+    // ---------------------------------------------------
+
+    const [employee] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [employee_id],
+    );
+
+    if (employee.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    const employee_name = employee[0].user_name;
+
+    // ---------------------------------------------------
+    // CHECK EMPLOYEE MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [validMember] = await connection.query(
+      `
+      SELECT *
+      FROM apt_org_members
+      WHERE org_id = ?
+      AND user_id = ?
+      `,
+      [org_id, employee_id],
+    );
+
+    if (validMember.length === 0) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message: "Employee is not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK EXIT PROCESS
+    // ---------------------------------------------------
+
+    const [exitProcess] = await connection.query(
+      `
+      SELECT *
+      FROM employee_exit_process
+      WHERE id = ?
+      AND org_id = ?
+      AND employee_id = ?
+      `,
+      [exit_process_id, org_id, employee_id],
+    );
+
+    if (exitProcess.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Exit process not found",
+      });
+    }
+
+    const exitProcessData = exitProcess[0];
+
+    // ---------------------------------------------------
+    // UPDATE APPLICATION STATUS
+    // ---------------------------------------------------
+
+    const [updateResult] = await connection.query(
+      `
+      UPDATE employee_exit_process
+      SET
+        application_status = ?,
+        resolved_at = NOW(),
+        response_message = ?,
+        response_by = ?
+      WHERE id = ?
+      AND org_id = ?
+      AND employee_id = ?
+      `,
+      [
+        application_status,
+        response_message,
+        action_performed_by_id,
+        exit_process_id,
+        org_id,
+        employee_id,
+      ],
+    );
+
+    if (updateResult.affectedRows < 1) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update application status",
+      });
+    }
+
+    // ---------------------------------------------------
+    // SAVE ACTIVITY LOG
+    // ---------------------------------------------------
+
+    const updatedPayload = {
+      exit_process_id,
+      employee_id,
+      org_id,
+      application_status,
+      response_message,
+      response_by: action_performed_by_id,
+    };
+
+    const [activityResult] = await connection.query(INSERT_ACTIVITY_SQL, [
+      action_performed_by_id,
+      employee_id,
+      org_id,
+      "EXIT_CANCELLED",
+      JSON.stringify(exitProcessData),
+      JSON.stringify(updatedPayload),
+      `Exit process cancelled by ${action_user_name} for employee ${employee_name}`,
+    ]);
+
+    if (activityResult.affectedRows < 1) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    // ---------------------------------------------------
+    // COMMIT
+    // ---------------------------------------------------
+
+    await connection.commit();
+
+    // ---------------------------------------------------
+    // RESPONSE
+    // ---------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message: "Exit process cancelled successfully",
       data: updatedPayload,
     });
   } catch (error) {
@@ -672,7 +1207,7 @@ export const update_employee_exit_process_status = async (req, res) => {
       await connection.rollback();
     }
 
-    console.error("Error in update_employee_exit_process_status:", error);
+    console.error("Error in exit_cancelled:", error);
 
     return res.status(500).json({
       success: false,
@@ -2500,7 +3035,15 @@ export const update_employee_exit_process_handover_query = async (req, res) => {
       });
     }
 
-    const manager_name = managerMember[0].user_name;
+    const [managerUserRows] = await connection.query(
+      `
+        SELECT user_name
+        FROM apt_users
+        WHERE id = ?
+        `,
+      [manager_id],
+    );
+    const manager_name = managerUserRows?.[0]?.user_name ?? "Manager";
 
     // ---------------- CHECK HANDOVER QUERY ----------------
 
@@ -3201,4 +3744,38 @@ export const get_all_employee_exit_process_handover_queries = async (
   }
 };
 
-// Manager -> Get All Employees Thats Are Inside in an Exit Process With All Assets Handover Queries
+// Get All Assets For Handover ::
+export const get_all_assets_for_handover = async (req, res) => {
+  try {
+    let connection;
+    const { org_id } = req;
+    const { user_id: manager_id } = req.user;
+
+    if (!org_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization id is required",
+      });
+    }
+    if (!manager_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Manager id is required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    
+  } catch (error) {
+    console.log("Error in get_all_assets_for_handover:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
