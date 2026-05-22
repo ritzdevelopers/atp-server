@@ -10,7 +10,9 @@ import {
   exit_in_process,
   get_all_employee_exit_processes,
   get_employee_exit_process,
+  get_all_assets_for_handover_of_an_employee,
   update_employee_exit_process_handover_query,
+  update_asset_handover_status,
 } from "../controllers/employee.exit.controller.js";
 
 const router = express.Router();
@@ -34,6 +36,13 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   get_employee_exit_process,
+);
+
+router.get(
+  "/assets-for-handover/:user_id",
+  user_validation_middleware,
+  req_sender_auth,
+  get_all_assets_for_handover_of_an_employee,
 );
 
 router.patch(
@@ -76,6 +85,13 @@ router.patch(
   user_validation_middleware,
   req_sender_auth,
   update_employee_exit_process_handover_query,
+);
+
+router.patch(
+  "/asset-handover-status/:asset_id",
+  user_validation_middleware,
+  req_sender_auth,
+  update_asset_handover_status,
 );
 
 export default router;

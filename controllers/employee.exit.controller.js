@@ -827,11 +827,31 @@ export const exit_completed = async (req, res) => {
 
     const exitProcessData = exitProcess[0];
 
+    const allowedExitAppStatuses = [
+      "pending",
+      "approved",
+      "rejected",
+      "in_progress",
+    ];
+
+    const normalizedAppStatus = String(
+      application_status ?? "",
+    )
+      .trim()
+      .toLowerCase();
+
+    if (!allowedExitAppStatuses.includes(normalizedAppStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `application_status must be one of: ${allowedExitAppStatuses.join(", ")}`,
+      });
+    }
+
     // ---------------------------------------------------
     // PREVENT DUPLICATE COMPLETION
     // ---------------------------------------------------
 
-    if (exitProcessData.application_status === "handover_completed") {
+    if (exitProcessData.application_status === "approved") {
       return res.status(400).json({
         success: false,
         message: "Exit process already completed",
@@ -863,13 +883,13 @@ export const exit_completed = async (req, res) => {
         application_status = ?,
         resolved_at = NOW(),
         response_message = ?,
-        response_by = ?
+        response_by_id = ?
       WHERE id = ?
       AND org_id = ?
       AND employee_id = ?
       `,
       [
-        application_status,
+        normalizedAppStatus,
         response_message,
         action_performed_by_id,
         exit_process_id,
@@ -893,7 +913,7 @@ export const exit_completed = async (req, res) => {
       exit_process_id,
       employee_id,
       org_id,
-      application_status,
+      application_status: normalizedAppStatus,
       response_message,
       response_by: action_performed_by_id,
     };
@@ -1131,7 +1151,7 @@ export const exit_cancelled = async (req, res) => {
         application_status = ?,
         resolved_at = NOW(),
         response_message = ?,
-        response_by = ?
+        response_by_id = ?
       WHERE id = ?
       AND org_id = ?
       AND employee_id = ?
@@ -3744,30 +3764,360 @@ export const get_all_employee_exit_process_handover_queries = async (
   }
 };
 
-// Get All Assets For Handover ::
-export const get_all_assets_for_handover = async (req, res) => {
+// Get All Assets For Handover of an Employee ::
+export const get_all_assets_for_handover_of_an_employee = async (req, res) => {
+  
+  let connection;
   try {
-    let connection;
     const { org_id } = req;
-    const { user_id: manager_id } = req.user;
+    const { user_id: returned_to_id } = req.user;
+    const { user_id: employee_id } = req.params;
 
-    if (!org_id) {
+
+    if (!org_id || !returned_to_id || !employee_id) {
       return res.status(400).json({
         success: false,
-        message: "Organization id is required",
-      });
-    }
-    if (!manager_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Manager id is required",
+        message:
+          "Organization id, current user, and employee id (param) are required",
       });
     }
 
     connection = await pool.promise().getConnection();
-    
+
+    const [returnedToMember] = await connection.query(
+      `
+        SELECT id
+        FROM apt_org_members
+        WHERE org_id = ?
+        AND user_id = ?
+      `,
+      [org_id, returned_to_id],
+    );
+
+    if (returnedToMember.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message:
+          "You are not a member of this organization (handover recipient check failed)",
+      });
+    }
+
+    let query = `
+      SELECT ea.*
+      FROM employee_assets ea
+      
+      WHERE ea.org_id = ?
+        AND ea.employee_id = ?
+        AND ea.returned_to_id = ?
+    `;
+    const sqlParams = [org_id, employee_id, returned_to_id, org_id];
+
+   
+
+    const [assets] = await connection.query(query, sqlParams);
+
+    return res.status(200).json({
+      success: true,
+      message:
+        assets.length === 0
+          ? "No assets assigned to you for handover"
+          : "Assets fetched successfully",
+      data: assets,
+    });
   } catch (error) {
     console.log("Error in get_all_assets_for_handover:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+// Get All Assets For Handover Notifications ::
+export const get_all_assets_for_handover_notifications = async (req, res) => {
+  let connection;
+  try {
+    const { org_id } = req;
+    const { user_id: returned_to_id } = req.user;
+    if (!org_id || !returned_to_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization id and current user are required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+
+    // Check if returned to is valid member of the organization ::
+    const [returnedToMember] = await connection.query(
+      `
+        SELECT id
+        FROM apt_org_members
+        WHERE org_id = ?
+        AND user_id = ?
+      `,
+      [org_id, returned_to_id],
+    );
+
+    if (returnedToMember.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "Returned to is not a member of this organization",
+      });
+    }
+    const query = `
+      SELECT ea.*
+      FROM employee_assets ea
+      INNER JOIN employee_exit_process eep
+        ON ea.employee_exit_process_id = eep.id
+      WHERE ea.org_id = ?
+        AND ea.returned_to_id = ?
+    `;
+    const [assets] = await connection.query(query, [org_id, returned_to_id]);
+
+    return res.status(200).json({
+      success: true,
+      message:
+        assets.length === 0
+          ? "No assets found for handover"
+          : "Assets fetched successfully",
+      data: assets,
+    });
+  } catch (error) {
+    console.log("Error in get_all_assets_for_handover:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+export const update_asset_handover_status = async (
+  req,
+  res,
+) => {
+  let connection;
+
+  try {
+    const { org_id } = req;
+
+    const {
+      user_id: returned_to_id,
+    } = req.user;
+
+    const { asset_id } = req.params;
+
+    const { is_returned } = req.body;
+
+    // ---------------------------------------------------
+    // VALIDATIONS
+    // ---------------------------------------------------
+
+    if (
+      !org_id ||
+      !returned_to_id ||
+      !asset_id ||
+      is_returned === undefined
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Organization id, returned to id, asset id and handover status are required",
+      });
+    }
+
+    connection =
+      await pool.promise().getConnection();
+
+    await connection.beginTransaction();
+
+    // ---------------------------------------------------
+    // CHECK IF RETURNED TO USER IS VALID MEMBER
+    // ---------------------------------------------------
+
+    const [member] = await connection.query(
+      `
+      SELECT *
+      FROM apt_org_members
+      WHERE org_id = ?
+      AND user_id = ?
+      `,
+      [org_id, returned_to_id],
+    );
+
+    if (member.length === 0) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message:
+          "You are not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK IF ASSET EXISTS
+    // ---------------------------------------------------
+
+    const [assets] = await connection.query(
+      `
+      SELECT *
+      FROM employee_assets
+      WHERE id = ?
+      AND org_id = ?
+      `,
+      [asset_id, org_id],
+    );
+
+    if (assets.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Asset not found",
+      });
+    }
+
+    const asset = assets[0];
+
+    // ---------------------------------------------------
+    // CHECK IF ASSET IS ASSIGNED
+    // TO CURRENT HANDOVER USER
+    // ---------------------------------------------------
+
+    if (
+      Number(asset.returned_to_id) !==
+      Number(returned_to_id)
+    ) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message:
+          "This asset is not assigned to you for handover",
+      });
+    }
+
+    // ---------------------------------------------------
+    // PREVENT DUPLICATE UPDATE
+    // ---------------------------------------------------
+
+    if (
+      Number(asset.is_returned) ===
+      Number(is_returned)
+    ) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message:
+          "Asset handover status already updated",
+      });
+    }
+
+    // ---------------------------------------------------
+    // UPDATE ASSET HANDOVER STATUS
+    // ---------------------------------------------------
+
+    const [updateResult] =
+      await connection.query(
+        `
+        UPDATE employee_assets
+        SET
+          is_returned = ?
+        WHERE id = ?
+        AND org_id = ?
+        `,
+        [
+          is_returned,
+          asset_id,
+          org_id,
+        ],
+      );
+
+    if (updateResult.affectedRows < 1) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message:
+          "Failed to update asset handover status",
+      });
+    }
+
+    // ---------------------------------------------------
+    // SAVE ACTIVITY LOG
+    // ---------------------------------------------------
+
+    const updatedPayload = {
+      asset_id,
+      org_id,
+      returned_to_id,
+      is_returned,
+    };
+
+    const [activityResult] =
+      await connection.query(
+        INSERT_ACTIVITY_SQL,
+        [
+          returned_to_id,
+          asset.employee_id,
+          org_id,
+          "UPDATE_ASSET_HANDOVER_STATUS",
+          JSON.stringify(asset),
+          JSON.stringify(updatedPayload),
+          `Asset handover status updated by user ${returned_to_id}`,
+        ],
+      );
+
+    if (activityResult.affectedRows < 1) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message:
+          "Failed to save activity log",
+      });
+    }
+
+    // ---------------------------------------------------
+    // COMMIT TRANSACTION
+    // ---------------------------------------------------
+
+    await connection.commit();
+
+    // ---------------------------------------------------
+    // RETURN SUCCESS RESPONSE
+    // ---------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Asset handover status updated successfully",
+      data: {
+        asset_id,
+        is_returned,
+      },
+    });
+  } catch (error) {
+    console.log(
+      "Error in update_asset_handover_status:",
+      error,
+    );
+
+    if (connection) {
+      await connection.rollback();
+    }
 
     return res.status(500).json({
       success: false,
