@@ -28,7 +28,9 @@ const allowedOrigins = [
   "https://atp-client.vercel.app",
   "capacitor://localhost",
   "http://localhost",
+  "https://localhost",
 ];
+
 app.use(
   cors({
     origin(origin, callback) {
