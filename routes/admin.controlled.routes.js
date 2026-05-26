@@ -11,6 +11,7 @@ import {
   add_user_external_information_controller,
   update_user_external_information_controller,
   delete_user_external_information_controller,
+  get_single_employee_controller,
 } from "../controllers/user.controller.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import user_authorization from "../middlewares/user_authorization.js";
@@ -39,6 +40,13 @@ router.get(
   "/get-all-users",
   user_validation_middleware, 
   get_all_users_controller,
+);
+
+// Get Single Employee Route :: used by management only 
+router.get(
+  "/get-single-employee",
+  user_validation_middleware, 
+  get_single_employee_controller,
 );
 
 // Update User Role Route :: It Will Be Used By Admin Only

@@ -2927,6 +2927,422 @@ export const delete_user_external_information_controller = async (req, res) => {
   }
 };
 
+export const get_single_employee_controller = async (
+  req,
+  res,
+) => {
+  let connection;
+
+  try {
+    const { user_id, org_id: orgIdRaw } = req.query;
+
+    const {
+      user_id: action_user_id,
+    } = req.user || {};
+
+    const org_id = Number(orgIdRaw);
+
+    // ---------------------------------------------------
+    // VALIDATIONS
+    // ---------------------------------------------------
+
+    if (!action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "action_user_id is required",
+      });
+    }
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "user_id is required",
+      });
+    }
+
+    if (!Number.isFinite(org_id) || org_id <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+
+    await connection.beginTransaction();
+
+    // ---------------------------------------------------
+    // CHECK ACTION USER MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [actionMemberResult] =
+      await connection.query(
+        `
+        SELECT id
+        FROM apt_org_members
+        WHERE user_id = ?
+        AND org_id = ?
+        `,
+        [action_user_id, org_id],
+      );
+
+    if (actionMemberResult.length === 0) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message:
+          "Action user is not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // CHECK EMPLOYEE MEMBERSHIP
+    // ---------------------------------------------------
+
+    const [employeeMemberResult] =
+      await connection.query(
+        `
+        SELECT id
+        FROM apt_org_members
+        WHERE user_id = ?
+        AND org_id = ?
+        `,
+        [user_id, org_id],
+      );
+
+    if (employeeMemberResult.length === 0) {
+      await connection.rollback();
+
+      return res.status(403).json({
+        success: false,
+        message:
+          "Employee is not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // EMPLOYEE BASIC INFO
+    // ---------------------------------------------------
+
+    const [employeeInfo] =
+      await connection.query(
+        `
+        SELECT
+          user.id,
+          user.user_name,
+          user.user_email,
+          user.user_phone,
+          user.created_at,
+
+          user_address.id AS address_id,
+          user_address.country,
+          user_address.state,
+          user_address.district,
+          user_address.city,
+          user_address.is_from_village,
+          user_address.village_name,
+          user_address.street,
+          user_address.house_number,
+          user_address.zip_code,
+
+          user_external_info.emergency_contact_name,
+          user_external_info.emergency_number,
+          user_external_info.relation_blood_line,
+
+          employees_bank_info.account_holder_name,
+          employees_bank_info.bank_name,
+          employees_bank_info.bank_branch,
+          employees_bank_info.account_number,
+          employees_bank_info.ifsc_code,
+          employees_bank_info.uan_number,
+
+          shifts.id AS shift_id,
+          shifts.shift_name,
+          shifts.start_time,
+          shifts.end_time,
+          shifts.working_days,
+          shifts.is_night_shift,
+
+          apt_user_roles.role_id,
+          apt_roles.role_name
+
+        FROM apt_users AS user
+
+        INNER JOIN apt_org_members AS om
+          ON om.user_id = user.id
+          AND om.org_id = ?
+
+        LEFT JOIN apt_user_roles
+          ON apt_user_roles.user_id = user.id
+          AND apt_user_roles.org_id = ?
+
+        LEFT JOIN apt_roles
+          ON apt_roles.id = apt_user_roles.role_id
+          AND apt_roles.org_id = ?
+
+        LEFT JOIN user_address
+          ON user.id = user_address.user_id
+          AND user_address.org_id = ?
+
+        LEFT JOIN user_external_info
+          ON user.id = user_external_info.user_id
+          AND user_external_info.org_id = ?
+
+        LEFT JOIN employees_bank_info
+          ON user.id = employees_bank_info.user_id
+          AND employees_bank_info.org_id = ?
+
+        LEFT JOIN user_shifts
+          ON user.id = user_shifts.user_id
+          AND user_shifts.org_id = ?
+
+        LEFT JOIN shifts
+          ON user_shifts.shift_id = shifts.id
+          AND shifts.org_id = ?
+
+        WHERE user.id = ?
+        LIMIT 1
+        `,
+        [
+          org_id,
+          org_id,
+          org_id,
+          org_id,
+          org_id,
+          org_id,
+          org_id,
+          org_id,
+          user_id,
+        ],
+      );
+
+    if (employeeInfo.length === 0) {
+      await connection.rollback();
+
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    // ---------------------------------------------------
+    // EMPLOYEE DOCUMENTS
+    // ---------------------------------------------------
+
+    const [documents] = await connection.query(
+      `
+      SELECT *
+      FROM user_docs
+      WHERE user_id = ?
+      AND org_id = ?
+      ORDER BY created_at DESC
+      `,
+      [user_id, org_id],
+    );
+
+    // ---------------------------------------------------
+    // EMPLOYEE ASSETS
+    // ---------------------------------------------------
+
+    const [assets] = await connection.query(
+      `
+      SELECT *
+      FROM employee_assets
+      WHERE employee_id = ?
+      AND org_id = ?
+      ORDER BY created_at DESC
+      `,
+      [user_id, org_id],
+    );
+
+    // ---------------------------------------------------
+    // LEAVE BALANCE
+    // ---------------------------------------------------
+
+    const [leaveBalance] =
+      await connection.query(
+        `
+        SELECT *
+        FROM leave_balance
+        WHERE user_id = ?
+        AND org_id = ?
+        ORDER BY year DESC, month DESC
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // LEAVE QUERIES
+    // ---------------------------------------------------
+
+    const [leaveQueries] =
+      await connection.query(
+        `
+        SELECT *
+        FROM leave_quiry
+        WHERE user_id = ?
+        AND org_id = ?
+        ORDER BY created_at DESC
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // ATTENDANCE LOGS
+    // ---------------------------------------------------
+
+    const [attendanceLogs] =
+      await connection.query(
+        `
+        SELECT *
+        FROM attendance_logs
+        WHERE user_id = ?
+        AND org_id = ?
+        ORDER BY timestamp_time DESC
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // ATTENDANCE RELATED QUERIES
+    // ---------------------------------------------------
+
+    const [attendanceQueries] =
+      await connection.query(
+        `
+        SELECT *
+        FROM attendance_related_queries
+        WHERE user_id = ?
+        AND org_id = ?
+        ORDER BY created_at DESC
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // IP ASSIGNMENTS
+    // ---------------------------------------------------
+
+    const [ipAssignments] =
+      await connection.query(
+        `
+        SELECT
+          ip_address_assignments.*,
+          organization_ips.label AS org_ip_label,
+          organization_ips.ip_address AS org_ip_address
+
+        FROM ip_address_assignments
+
+        LEFT JOIN organization_ips
+          ON ip_address_assignments.ip_id = organization_ips.id
+
+        WHERE ip_address_assignments.user_id = ?
+        AND ip_address_assignments.org_id = ?
+        ORDER BY ip_address_assignments.created_at DESC
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // FEATURE OVERRIDES
+    // ---------------------------------------------------
+
+    const [featureOverrides] =
+      await connection.query(
+        `
+        SELECT
+          aufo.*,
+          apt_features.feature_name,
+          apt_features.feature_val
+        FROM apt_user_feature_overrides aufo
+        LEFT JOIN apt_features
+          ON apt_features.id = aufo.feature_id
+        WHERE aufo.user_id = ?
+        AND aufo.org_id = ?
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // EMPLOYEE REFERENCES
+    // ---------------------------------------------------
+
+    const [references] =
+      await connection.query(
+        `
+        SELECT
+          er.*,
+
+          ref_user.user_name AS referred_by_name,
+          ref_user.user_email AS referred_by_email,
+          ref_user.user_phone AS referred_by_phone
+
+        FROM employee_references er
+
+        LEFT JOIN apt_users AS ref_user
+          ON er.referred_by_id = ref_user.id
+
+        WHERE er.employee_id = ?
+        AND er.org_id = ?
+        `,
+        [user_id, org_id],
+      );
+
+    // ---------------------------------------------------
+    // NORMALIZED RESPONSE
+    // ---------------------------------------------------
+
+    const normalizedData = {
+      user_info: employeeInfo[0],
+
+      documents: documents || [],
+
+      assets: assets || [],
+
+      leave_balance: leaveBalance || [],
+
+      leave_queries: leaveQueries || [],
+
+      attendance_logs: attendanceLogs || [],
+
+      attendance_related_queries: attendanceQueries || [],
+
+      ip_assignments: ipAssignments || [],
+
+      feature_overrides: featureOverrides || [],
+
+      references: references || [],
+    };
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message:
+        "Employee details fetched successfully",
+      data: normalizedData,
+    });
+  } catch (error) {
+    console.error(
+      "get_single_employee_controller:",
+      error,
+    );
+
+    if (connection) {
+      await connection.rollback();
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
 
 // User Reference Controller ::
 export const create_user_reference_controller = async (req, res) => { }

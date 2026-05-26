@@ -24,7 +24,7 @@ export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
         DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
         DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
         attendance_status AS status,
-        working_time
+        COALESCE(working_time, working_hours, 0) AS working_time
       FROM attendance
       WHERE user_id = ?
     `;
@@ -101,28 +101,31 @@ export const get_all_users_with_attendance_history = async (req, res) => {
         message: "No users found in the organization",
       });
     }
-    // Get user_name, email, phone and attendance history
     const query = `
     SELECT 
+      user_info.user_id AS user_id,
       user_info.user_name,
       user_info.user_email,
-      user_info.user_role_name,
-      user_info.user_id AS user_id,
+      COALESCE(apt_roles.role_name, user_info.user_role_name) AS user_role_name,
+      user_info.id AS attendance_id,
       DATE_FORMAT(user_info.attendance_date, '%Y-%m-%d') AS attendance_date,
       DATE_FORMAT(user_info.check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
       DATE_FORMAT(user_info.check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
       user_info.attendance_status,
-      user_info.working_time,
-  
+      COALESCE(user_info.working_time, user_info.working_hours, 0) AS working_time,
       apt_users.created_at AS joining_date
-  
     FROM attendance AS user_info
-  
     INNER JOIN apt_users 
       ON user_info.user_id = apt_users.id
-  
+    LEFT JOIN apt_user_roles
+      ON apt_user_roles.user_id = apt_users.id
+      AND apt_user_roles.org_id = user_info.org_id
+    LEFT JOIN apt_roles
+      ON apt_roles.id = apt_user_roles.role_id
+      AND apt_roles.org_id = user_info.org_id
     WHERE user_info.user_id IN (?)
-    AND user_info.org_id = ?
+      AND user_info.org_id = ?
+    ORDER BY user_info.attendance_date DESC
   `;
     const [result] = await db
       .promise()
@@ -160,7 +163,7 @@ export const get_single_user_with_attendance_history = async (req, res) => {
         message: "Organization member not found",
       });
     }
-    // Validate Employee -> apt_users
+    // Validate Employee -> apt_org_members
     const fetch_employee_query = "SELECT * FROM apt_org_members WHERE user_id = ? AND org_id = ?";
     const [employee_result] = await db.promise().query(fetch_employee_query, [employee_id, org_id]);
     if (employee_result.length === 0) {
@@ -170,34 +173,84 @@ export const get_single_user_with_attendance_history = async (req, res) => {
       });
     }
     const now = new Date();
-    const resolvedDate = Number(date) || now.getDate();
+    const hasDateFilter = date !== undefined && date !== null && String(date).trim() !== "";
+    const resolvedDate = hasDateFilter ? Number(date) : null;
     const resolvedMonth = Number(month) || now.getMonth() + 1;
     const resolvedYear = Number(year) || now.getFullYear();
 
-    // Get user_name, email, phone and attendance history
+    const queryValues = [employee_id, org_id];
+    let dateFilterSql = "";
+    if (resolvedDate) {
+      dateFilterSql = "AND DAY(user_info.attendance_date) = ?";
+      queryValues.push(resolvedDate);
+    }
+    queryValues.push(resolvedMonth, resolvedYear);
+
     const query = `
     SELECT 
+      user_info.user_id,
       user_info.user_name,
       user_info.user_email,
-      user_info.user_role_name,
-      user_info.id AS user_id,
+      COALESCE(apt_roles.role_name, user_info.user_role_name) AS user_role_name,
+      user_info.id AS attendance_id,
       DATE_FORMAT(user_info.attendance_date, '%Y-%m-%d') AS attendance_date,
       DATE_FORMAT(user_info.check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
       DATE_FORMAT(user_info.check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
       user_info.attendance_status,
-      user_info.working_time,
+      COALESCE(user_info.working_time, user_info.working_hours, 0) AS working_time,
+      apt_users.user_phone,
       apt_users.created_at AS joining_date
     FROM attendance AS user_info
     INNER JOIN apt_users ON user_info.user_id = apt_users.id
+    LEFT JOIN apt_user_roles
+      ON apt_user_roles.user_id = apt_users.id
+      AND apt_user_roles.org_id = user_info.org_id
+    LEFT JOIN apt_roles
+      ON apt_roles.id = apt_user_roles.role_id
+      AND apt_roles.org_id = user_info.org_id
     WHERE user_info.user_id = ? 
       AND user_info.org_id = ?
-      AND DAY(user_info.attendance_date) = ?
+      ${dateFilterSql}
       AND MONTH(user_info.attendance_date) = ?
       AND YEAR(user_info.attendance_date) = ?
+    ORDER BY user_info.attendance_date DESC
     `;
     const [result] = await db
       .promise()
-      .query(query, [employee_id, org_id, resolvedDate, resolvedMonth, resolvedYear]);
+      .query(query, queryValues);
+
+    if (result.length === 0) {
+      const [profileRows] = await db.promise().query(
+        `
+        SELECT
+          apt_users.id AS user_id,
+          apt_users.user_name,
+          apt_users.user_email,
+          apt_users.user_phone,
+          apt_users.created_at AS joining_date,
+          COALESCE(apt_roles.role_name, '') AS user_role_name
+        FROM apt_users
+        INNER JOIN apt_org_members
+          ON apt_org_members.user_id = apt_users.id
+          AND apt_org_members.org_id = ?
+        LEFT JOIN apt_user_roles
+          ON apt_user_roles.user_id = apt_users.id
+          AND apt_user_roles.org_id = ?
+        LEFT JOIN apt_roles
+          ON apt_roles.id = apt_user_roles.role_id
+          AND apt_roles.org_id = ?
+        WHERE apt_users.id = ?
+        LIMIT 1
+        `,
+        [org_id, org_id, org_id, employee_id],
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: profileRows,
+      });
+    }
+
     return res.status(200).json({
       success: true,
       data: result,
