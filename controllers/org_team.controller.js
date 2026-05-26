@@ -1513,7 +1513,10 @@ export const get_single_org_team_controller = async (req, res) => {
           tm.added_by_id,
           tm.added_by_name,
           tm.removed_by_id,
-          tm.removed_by_name
+          tm.removed_by_name,
+
+          eep.action_type AS exit_process_action_type,
+          eep.application_status AS exit_process_application_status
 
         FROM org_teams ot
 
@@ -1529,6 +1532,23 @@ export const get_single_org_team_controller = async (req, res) => {
 
         LEFT JOIN apt_users au
           ON au.id = tm.user_id
+
+        LEFT JOIN employee_exit_process eep
+          ON eep.employee_id = tm.user_id
+          AND eep.org_id = ot.org_id
+          AND eep.id = (
+            SELECT eep2.id
+            FROM employee_exit_process eep2
+            WHERE eep2.employee_id = tm.user_id
+              AND eep2.org_id = ot.org_id
+            ORDER BY
+              CASE
+                WHEN eep2.application_status IN ('pending', 'in_progress') THEN 0
+                ELSE 1
+              END,
+              eep2.created_at DESC
+            LIMIT 1
+          )
 
         WHERE ot.id = ?
           AND ot.org_id = ?
@@ -1560,6 +1580,9 @@ export const get_single_org_team_controller = async (req, res) => {
           added_by_name: row.added_by_name,
           removed_by_id: row.removed_by_id,
           removed_by_name: row.removed_by_name,
+          exit_process_action_type: row.exit_process_action_type ?? null,
+          exit_process_application_status:
+            row.exit_process_application_status ?? null,
         });
       }
     }

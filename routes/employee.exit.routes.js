@@ -10,6 +10,7 @@ import {
   exit_in_process,
   get_all_employee_exit_processes,
   get_employee_exit_process,
+  get_my_exit_process,
   get_all_assets_for_handover_of_an_employee,
   update_employee_exit_process_handover_query,
   update_asset_handover_status,
@@ -36,6 +37,13 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   get_employee_exit_process,
+);
+
+router.get(
+  "/get-my-exit-process",
+  user_validation_middleware,
+  req_sender_auth,
+  get_my_exit_process,
 );
 
 router.get(

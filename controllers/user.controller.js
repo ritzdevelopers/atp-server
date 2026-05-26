@@ -477,58 +477,82 @@ export const get_all_users_controller = async (req, res) => {
 
     // Fetch All Users Of The Organization Except Organization Owner
     const query = `
-  SELECT 
-    apt_users.id AS id,
-    apt_org_members.id AS org_member_id,
-    apt_user_roles.id AS user_role_assignment_id,
-    apt_users.user_name,
-    apt_users.user_email,
-    apt_users.user_phone,
-    apt_org_members.created_at,
+SELECT 
+  apt_users.id AS id,
+  apt_org_members.id AS org_member_id,
+  apt_user_roles.id AS user_role_assignment_id,
 
-    apt_user_roles.role_id,
-    apt_roles.role_name,
+  apt_users.user_name,
+  apt_users.user_email,
+  apt_users.user_phone,
 
-    user_shifts.shift_id as user_shift_id,
-    user_shifts.assigned_by_name as shift_assigned_by_name,
+  apt_org_members.created_at,
 
+  apt_user_roles.role_id,
+  apt_roles.role_name,
 
-    shifts.shift_name as user_shift_name,
-    shifts.start_time as user_shift_start_time,
-    shifts.end_time as user_shift_end_time,
-    shifts.working_days as user_shift_working_days,
-    shifts.is_night_shift as is_night_shift,
+  user_shifts.shift_id AS user_shift_id,
+  user_shifts.assigned_by_name AS shift_assigned_by_name,
 
-    user_ip_assignments.assigned_ips AS assigned_ips
+  shifts.shift_name AS user_shift_name,
+  shifts.start_time AS user_shift_start_time,
+  shifts.end_time AS user_shift_end_time,
+  shifts.working_days AS user_shift_working_days,
+  shifts.is_night_shift AS is_night_shift,
 
-  FROM apt_org_members 
-  INNER JOIN apt_users 
-    ON apt_users.id = apt_org_members.user_id
-  INNER JOIN apt_user_roles
-    ON apt_user_roles.user_id = apt_users.id AND apt_user_roles.org_id = apt_org_members.org_id
-  INNER JOIN apt_roles
-    ON apt_roles.id = apt_user_roles.role_id AND apt_roles.org_id = apt_org_members.org_id
-  LEFT JOIN user_shifts
-    ON user_shifts.user_id = apt_users.id AND user_shifts.org_id = apt_org_members.org_id
-  LEFT JOIN shifts
-    ON shifts.id = user_shifts.shift_id AND shifts.org_id = apt_org_members.org_id
-  LEFT JOIN (
-    SELECT
-      ia.user_id,
-      ia.org_id,
-      JSON_ARRAYAGG(
-        JSON_OBJECT(
-          'ip_id', ia.ip_id,
-          'ip_address', ia.ip_address,
-          'ip_label', ia.ip_label
-        )
-      ) AS assigned_ips
-    FROM ip_address_assignments ia
-    GROUP BY ia.user_id, ia.org_id
-  ) user_ip_assignments
-    ON user_ip_assignments.user_id = apt_users.id
-    AND user_ip_assignments.org_id = apt_org_members.org_id
-  WHERE apt_org_members.org_id = ? AND apt_users.id != ?
+  user_ip_assignments.assigned_ips AS assigned_ips,
+
+  employee_exit_process.action_type AS exit_process_action_type,
+  employee_exit_process.application_status AS exit_process_application_status
+
+FROM apt_org_members
+
+INNER JOIN apt_users 
+ON apt_users.id = apt_org_members.user_id
+
+INNER JOIN apt_user_roles
+ON apt_user_roles.user_id = apt_users.id
+AND apt_user_roles.org_id = apt_org_members.org_id
+
+INNER JOIN apt_roles
+ON apt_roles.id = apt_user_roles.role_id
+AND apt_roles.org_id = apt_org_members.org_id
+
+LEFT JOIN user_shifts
+ON user_shifts.user_id = apt_users.id
+AND user_shifts.org_id = apt_org_members.org_id
+
+LEFT JOIN shifts
+ON shifts.id = user_shifts.shift_id
+AND shifts.org_id = apt_org_members.org_id
+
+LEFT JOIN (
+  SELECT
+    ia.user_id,
+    ia.org_id,
+
+    JSON_ARRAYAGG(
+      JSON_OBJECT(
+        'ip_id', ia.ip_id,
+        'ip_address', ia.ip_address,
+        'ip_label', ia.ip_label
+      )
+    ) AS assigned_ips
+
+  FROM ip_address_assignments ia
+
+  GROUP BY ia.user_id, ia.org_id
+) user_ip_assignments
+
+ON user_ip_assignments.user_id = apt_users.id
+AND user_ip_assignments.org_id = apt_org_members.org_id
+
+LEFT JOIN employee_exit_process
+ON employee_exit_process.employee_id = apt_users.id
+AND employee_exit_process.org_id = apt_org_members.org_id
+
+WHERE apt_org_members.org_id = ?
+AND apt_users.id != ?
 `;
 
     const [result] = await db.promise().query(query, [organization_id, organization_owner_id]);

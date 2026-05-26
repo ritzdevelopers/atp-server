@@ -2118,6 +2118,370 @@ export const get_employee_exit_process = async (req, res) => {
   }
 };
 
+
+export const get_my_exit_process = async (req, res) => {
+  let connection;
+  
+  try {
+    const { user_id } = req.user;
+
+    const { org_id } = req;
+ 
+
+    // ---------------------------------------------------
+    // VALIDATIONS
+    // ---------------------------------------------------
+
+    if (!user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Action performer id is required",
+      });
+    }
+
+    if (!org_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization id is required",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+
+    // ---------------------------------------------------
+    // Check If action_performed_by_id is valid org member
+    // ---------------------------------------------------
+
+    const [actionUser] = await connection.query(
+      `
+        SELECT id
+        FROM apt_org_members
+        WHERE org_id = ?
+        AND user_id = ?
+      `,
+      [org_id, user_id],
+    );
+
+    if (actionUser.length === 0) {
+      return res.status(403).json({
+        success: false,
+        message: "You are not a member of this organization",
+      });
+    }
+
+    // ---------------------------------------------------
+    // Check If Organization Exists
+    // ---------------------------------------------------
+
+    const [organization] = await connection.query(
+      `
+        SELECT id
+        FROM apt_organizations
+        WHERE id = ?
+      `,
+      [org_id],
+    );
+
+    if (organization.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
+    }
+
+    const [exitPick] = await connection.query(
+      `
+        SELECT id
+        FROM employee_exit_process
+        WHERE employee_id = ?
+        AND org_id = ?
+        ORDER BY
+          CASE
+            WHEN application_status IN ('pending', 'in_progress') THEN 0
+            ELSE 1
+          END,
+          created_at DESC
+        LIMIT 1
+      `,
+      [user_id, org_id],
+    );
+
+    if (exitPick.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee exit process not found",
+      });
+    }
+
+    const exit_process_id = exitPick[0].id;
+
+    // ---------------------------------------------------
+    // Fetch Employee Exit Process + Assets + Handover Queries
+    // ---------------------------------------------------
+
+    const query = `
+      SELECT
+        eep.id,
+        eep.employee_id,
+        eep.org_id,
+        eep.team_id,
+        eep.action_type,
+        eep.action_reason,
+        eep.application_status,
+        eep.exit_date,
+        eep.last_working_day,
+        eep.action_performed_by,
+        eep.response_by_id,
+        eep.response_message,
+        eep.resolved_at,
+        eep.created_at,
+        eep.updated_at,
+
+        emp.user_name AS employee_name,
+        emp.user_email AS employee_email,
+        emp.user_phone AS employee_phone,
+
+        ot.team_name,
+
+        ap.user_name AS action_performed_by_name,
+
+        rp.user_name AS response_by_name,
+
+        eua.id AS employee_asset_id,
+        eua.asset_name AS employee_asset_name,
+        eua.asset_summary AS employee_asset_summary,
+        eua.asset_type AS employee_asset_type,
+        eua.asset_image_url AS employee_asset_image_url,
+        eua.is_returned,
+        eua.returned_to_id,
+        eua.handover_date_time,
+
+        returned_user.user_name AS returned_to_name,
+
+        hq.id AS handover_query_id,
+        hq.asset_id,
+        hq.custom_task_name,
+        hq.manager_id,
+        hq.handover_status,
+        hq.remarks,
+        hq.handover_date,
+        hq.created_at AS handover_created_at,
+        hq.updated_at AS handover_updated_at,
+
+        manager.user_name AS manager_name,
+
+        ea.asset_name,
+        ea.asset_summary,
+        ea.asset_type,
+        ea.asset_image_url
+
+      FROM employee_exit_process eep
+
+      LEFT JOIN apt_users emp
+      ON eep.employee_id = emp.id
+
+      LEFT JOIN org_teams ot
+      ON eep.team_id = ot.id
+
+      LEFT JOIN apt_users ap
+      ON eep.action_performed_by = ap.id
+
+      LEFT JOIN apt_users rp
+      ON eep.response_by_id = rp.id
+
+      LEFT JOIN employee_assets eua
+      ON eep.employee_id = eua.employee_id
+      AND eep.org_id = eua.org_id
+
+      LEFT JOIN apt_users returned_user
+      ON eua.returned_to_id = returned_user.id
+
+      LEFT JOIN handover_query hq
+      ON eep.id = hq.employee_exit_process_id
+
+      LEFT JOIN apt_users manager
+      ON hq.manager_id = manager.id
+
+      LEFT JOIN employee_assets ea
+      ON hq.asset_id = ea.id
+
+      WHERE eep.id = ?
+      AND eep.org_id = ?
+
+      ORDER BY hq.id DESC
+    `;
+
+    const values = [exit_process_id, org_id];
+
+    const [rows] = await connection.query(query, values);
+
+    // ---------------------------------------------------
+    // Check If Exit Process Exists
+    // ---------------------------------------------------
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee exit process not found",
+      });
+    }
+
+    // ---------------------------------------------------
+    // FORMAT RESPONSE
+    // ---------------------------------------------------
+
+    const firstRow = rows[0];
+
+    // ---------------------------------------------------
+    // EMPLOYEE ASSETS
+    // ---------------------------------------------------
+
+    const assetMap = new Map();
+
+    rows.forEach((row) => {
+      if (row.employee_asset_id && !assetMap.has(row.employee_asset_id)) {
+        assetMap.set(row.employee_asset_id, {
+          id: row.employee_asset_id,
+
+          asset_name: row.employee_asset_name,
+
+          asset_summary: row.employee_asset_summary,
+
+          asset_type: row.employee_asset_type,
+
+          asset_image_url: row.employee_asset_image_url,
+
+          is_returned: row.is_returned,
+
+          returned_to_id: row.returned_to_id,
+
+          returned_to_name: row.returned_to_name,
+
+          handover_date_time: row.handover_date_time,
+        });
+      }
+    });
+
+    const employee_assets = Array.from(assetMap.values());
+
+    // ---------------------------------------------------
+    // HANDOVER QUERIES
+    // ---------------------------------------------------
+
+    const handoverMap = new Map();
+
+    rows.forEach((row) => {
+      if (row.handover_query_id && !handoverMap.has(row.handover_query_id)) {
+        handoverMap.set(row.handover_query_id, {
+          handover_query_id: row.handover_query_id,
+
+          asset_id: row.asset_id,
+
+          asset_name: row.asset_name,
+
+          asset_summary: row.asset_summary,
+
+          asset_type: row.asset_type,
+
+          asset_image_url: row.asset_image_url,
+
+          custom_task_name: row.custom_task_name,
+
+          manager_id: row.manager_id,
+
+          manager_name: row.manager_name,
+
+          handover_status: row.handover_status,
+
+          remarks: row.remarks,
+
+          handover_date: row.handover_date,
+
+          created_at: row.handover_created_at,
+
+          updated_at: row.handover_updated_at,
+        });
+      }
+    });
+
+    const handover_queries = Array.from(handoverMap.values());
+
+    // ---------------------------------------------------
+    // FINAL RESPONSE
+    // ---------------------------------------------------
+
+    const formattedResponse = {
+      id: firstRow.id,
+
+      employee_id: firstRow.employee_id,
+
+      employee_name: firstRow.employee_name,
+
+      employee_email: firstRow.employee_email,
+
+      employee_phone: firstRow.employee_phone,
+
+      org_id: firstRow.org_id,
+
+      team_id: firstRow.team_id,
+
+      team_name: firstRow.team_name,
+
+      action_type: firstRow.action_type,
+
+      action_reason: firstRow.action_reason,
+
+      application_status: firstRow.application_status,
+
+      exit_date: firstRow.exit_date,
+
+      last_working_day: firstRow.last_working_day,
+
+      action_performed_by: firstRow.action_performed_by,
+
+      action_performed_by_name: firstRow.action_performed_by_name,
+
+      response_by_id: firstRow.response_by_id,
+
+      response_by_name: firstRow.response_by_name,
+
+      response_message: firstRow.response_message,
+
+      resolved_at: firstRow.resolved_at,
+
+      created_at: firstRow.created_at,
+
+      updated_at: firstRow.updated_at,
+
+      employee_assets,
+
+      handover_queries,
+    };
+
+    // ---------------------------------------------------
+    // RETURN RESPONSE
+    // ---------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      message: "Employee exit process fetched successfully",
+      data: formattedResponse,
+    });
+  } catch (error) {
+    console.error("Error in get_my_exit_process:", error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+
 export const get_all_employee_exit_processes = async (req, res) => {
   let connection;
 
