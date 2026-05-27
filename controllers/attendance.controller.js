@@ -112,7 +112,7 @@ export const markAttendanceController = async (req, res) => {
 
     const userIp = getUserIP(req);
  
-
+    console.log("userIp", userIp, "assignedIps", assignedIps);
     if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !assignedIps.includes(userIp)) {
       await connection.rollback();
 
