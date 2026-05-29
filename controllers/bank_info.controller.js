@@ -303,13 +303,7 @@ export const create_bank_info_controller = async (req, res) => {
   }
 };
 
-// Update Bank Info Controller
-/**
- * PATCH JSON:
- * - org_id (required)
- * - id (employees_bank_info PK) OR user_id — locate row within org
- * - Optional overrides: account_holder_name, account_number, bank_name, bank_branch, ifsc_code, uan_number (null clears UAN)
- */
+ 
 export const update_bank_info_controller = async (req, res) => {
   let connection;
 

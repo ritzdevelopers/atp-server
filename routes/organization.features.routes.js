@@ -1,6 +1,6 @@
 import { Router } from "express";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
-import user_authorization from "../middlewares/user_authorization.js";
+
 import {
     assign_feature_to_employee_controller,
     assign_feature_to_role_controller,
@@ -12,6 +12,7 @@ import {
     update_feature_of_employee_controller,
     update_feature_of_role_controller,
 } from "../controllers/organization.features.controller.js";
+
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
 
@@ -21,8 +22,7 @@ router.get("/get-organization-features",
     user_validation_middleware,
     user_feature_access_checker("employees-features-management"),
     get_organization_features_controller);
-
-    // employee-feature-management
+    
 router.get(
     "/get-all-employees-with-accessible-features",
     user_validation_middleware,

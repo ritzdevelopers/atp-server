@@ -47,35 +47,30 @@ router.get(
   "/get-my-team",
   user_validation_middleware,
   req_sender_auth,
-  user_feature_access_checker("employee-management"),
   get_single_org_team_member_controller,
 );
 router.get(
   "/get-team/:team_id",
   user_validation_middleware,
-  req_sender_auth,
-  user_feature_access_checker("employee-management"),
+  req_sender_auth, 
   get_single_org_team_controller,
 );
 router.get(
   "/team-activity/:team_id",
   user_validation_middleware,
-  req_sender_auth,
-  user_feature_access_checker("employee-management"),
+  req_sender_auth, 
   get_team_activity_feed_controller,
 );
 router.get(
   "/exit-process-report/:employee_id",
   user_validation_middleware,
-  req_sender_auth,
-  user_feature_access_checker("employee-management"),
+  req_sender_auth, 
   get_team_member_exit_process_reports_controller,
 );
 router.get(
   "/get-all-teams",
   user_validation_middleware,
-  req_sender_auth,
-  user_feature_access_checker("employee-management"),
+  req_sender_auth, 
   get_all_org_team_members_controller,
 );
 

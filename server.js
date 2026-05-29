@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
-import db from "./db/connect.js";
 import authRoutes from "./routes/admin.auth.routes.js";
 import userRoutes from "./routes/admin.controlled.routes.js"; 
 import userRolesRoutes from "./routes/user.roles.route.js";
@@ -103,6 +102,5 @@ app.use("/api/employee-exit", employeeExitRoutes);
 app.use("/api/tasks-management", tasksRoutes);
 
 app.listen(3000, () => {
-  db.connect();
   console.log("Server is running on port 3000");
 });

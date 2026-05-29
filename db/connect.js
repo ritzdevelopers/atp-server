@@ -55,23 +55,124 @@ function buildConnectionConfig() {
 
 const connectionConfig = buildConnectionConfig();
 
-console.log(connectionConfig);
+const sharedMysqlOptions = {
+  enableKeepAlive: true,
+  keepAliveInitialDelay: 10_000,
+};
 
-const db = mysql.createConnection(connectionConfig);
+function isRecoverableConnectionError(err) {
+  if (!err) return false;
+  const code = err.code;
+  return (
+    err.fatal === true ||
+    code === "PROTOCOL_CONNECTION_LOST" ||
+    code === "ECONNRESET" ||
+    code === "ETIMEDOUT" ||
+    code === "PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR" ||
+    code === "EPIPE"
+  );
+}
+
+function attachPoolConnectionErrorHandler(connection) {
+  connection.on("error", (err) => {
+    console.error(
+      "[mysql pool] connection error:",
+      err.code || err.errno,
+      err.message,
+    );
+  });
+}
 
 export const pool = mysql.createPool({
   ...connectionConfig,
+  ...sharedMysqlOptions,
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
 });
 
-db.connect((err) => {
-  if (err) {
-    console.error("Error connecting to database: ", err);
-  } else {
-    console.log("Connected to database ✅");
-  }
+pool.on("connection", (connection) => {
+  attachPoolConnectionErrorHandler(connection);
 });
+
+pool.on("error", (err) => {
+  console.error("[mysql pool] pool error:", err.code || err.errno, err.message);
+});
+
+let underlyingConn = null;
+let reconnectTimer = null;
+
+function connectUnderlying(callback) {
+  underlyingConn.connect((err) => {
+    if (err) {
+      console.error("[mysql] connect error:", err.message);
+    } else {
+      console.log("Connected to database ✅");
+    }
+    if (typeof callback === "function") callback(err);
+  });
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer) return;
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    console.log("[mysql] reconnecting…");
+    const previous = underlyingConn;
+    try {
+      previous?.destroy();
+    } catch {
+      /* ignore */
+    }
+    try {
+      underlyingConn = createUnderlyingConnection();
+      connectUnderlying((err) => {
+        if (err) scheduleReconnect();
+      });
+    } catch (e) {
+      console.error("[mysql] reconnect setup failed:", e.message);
+      scheduleReconnect();
+    }
+  }, 2000);
+}
+
+function createUnderlyingConnection() {
+  const conn = mysql.createConnection({
+    ...connectionConfig,
+    ...sharedMysqlOptions,
+  });
+
+  conn.on("error", (err) => {
+    console.error(
+      "[mysql] connection error:",
+      err.code || err.errno,
+      err.message,
+    );
+    if (isRecoverableConnectionError(err)) {
+      scheduleReconnect();
+    }
+  });
+
+  return conn;
+}
+
+underlyingConn = createUnderlyingConnection();
+connectUnderlying();
+
+/** Stable export; delegates to the current connection and survives reconnects. */
+const db = new Proxy(
+  {},
+  {
+    get(_target, prop) {
+      const conn = underlyingConn;
+      if (!conn) return undefined;
+      const value = conn[prop];
+      if (typeof value === "function") {
+        return (...args) => value.apply(conn, args);
+      }
+      return value;
+    },
+  },
+);
 
 export default db;
