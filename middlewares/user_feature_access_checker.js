@@ -7,7 +7,7 @@ const user_feature_access_checker = (feature_value) => {
 
     try {
 
-      const req_user = req.user; 
+      const req_user = req.user;
       // Validate User
       if (!req_user || !req_user.user_id) {
         return res.status(401).json({
