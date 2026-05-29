@@ -760,15 +760,8 @@ export const get_role_feature_mappings_controller = async (req, res) => {
 
 export const get_all_organization_members_with_accessible_features_and_roles_controller =
   async (req, res) => {
-    try {
-      const req_user = req.user;
-      if (!req_user || req_user.user_role_name !== "admin") {
-        return res.status(400).json({
-          error: "Unauthorized Access",
-          message: "Unauthorized Access",
-          success: false,
-        });
-      }
+      try {
+      
       const org_id = Number(req.query?.org_id ?? req.body?.org_id);
       if (!org_id) {
         return res.status(400).json({
@@ -788,52 +781,59 @@ export const get_all_organization_members_with_accessible_features_and_roles_con
         });
       }
       const query = `
-    SELECT 
-        apt_users.id as user_id,
+  SELECT 
+    apt_users.id as user_id,
 
-        apt_users.user_name,
-        apt_users.user_email,
-        apt_users.user_phone,
-        apt_users.created_at,
+    apt_users.user_name,
+    apt_users.user_email,
+    apt_users.user_phone,
+    apt_users.created_at,
 
-        apt_user_roles.role_id as user_role_id,
-        apt_roles.role_name,
+    apt_user_roles.role_id as user_role_id,
+    apt_roles.role_name,
 
-        apt_user_feature_overrides.feature_id as feature_id,
-        apt_user_feature_overrides.is_allowed as feature_is_allowed,
+    apt_role_features.feature_id as role_feature_id,
 
-        apt_features.feature_name as feature_name,
-        apt_features.feature_val as feature_val
+    apt_user_feature_overrides.feature_id as override_feature_id,
 
-    FROM apt_org_members
+    apt_features.id as feature_id,
+    apt_features.feature_name,
+    apt_features.feature_val
 
-    INNER JOIN apt_users 
-        ON apt_users.id = apt_org_members.user_id
+FROM apt_org_members
 
-    INNER JOIN apt_user_roles 
-        ON apt_user_roles.user_id = apt_users.id 
-        AND apt_user_roles.org_id = apt_org_members.org_id
+INNER JOIN apt_users 
+    ON apt_users.id = apt_org_members.user_id
 
-    INNER JOIN apt_roles 
-        ON apt_roles.id = apt_user_roles.role_id 
-        AND apt_roles.org_id = apt_org_members.org_id
+INNER JOIN apt_user_roles 
+    ON apt_user_roles.user_id = apt_users.id 
+    AND apt_user_roles.org_id = apt_org_members.org_id
 
-    LEFT JOIN apt_user_feature_overrides 
-        ON apt_user_feature_overrides.user_id = apt_users.id 
-        AND apt_user_feature_overrides.org_id = apt_org_members.org_id 
-        AND apt_user_feature_overrides.is_allowed = 1
+INNER JOIN apt_roles 
+    ON apt_roles.id = apt_user_roles.role_id 
+    AND apt_roles.org_id = apt_org_members.org_id
 
-    LEFT JOIN apt_features
-        ON apt_features.id = apt_user_feature_overrides.feature_id
+INNER JOIN apt_role_features 
+    ON apt_role_features.role_id = apt_user_roles.role_id
+    AND apt_role_features.org_id = apt_org_members.org_id
 
-    WHERE apt_org_members.org_id = ?
+INNER JOIN apt_features
+    ON apt_features.id = apt_role_features.feature_id
+
+LEFT JOIN apt_user_feature_overrides 
+    ON apt_user_feature_overrides.user_id = apt_users.id 
+    AND apt_user_feature_overrides.org_id = apt_org_members.org_id 
+    AND apt_user_feature_overrides.feature_id = apt_role_features.feature_id
+    AND apt_user_feature_overrides.is_allowed = 0
+
+WHERE apt_org_members.org_id = ?
 `;
     const [rows] = await db.promise().query(query, [org_id]);
 
       const usersMap = new Map();
 
       for (const row of rows) {
-        // Create user only once
+
         if (!usersMap.has(row.user_id)) {
           usersMap.set(row.user_id, {
             user_id: row.user_id,
@@ -841,33 +841,30 @@ export const get_all_organization_members_with_accessible_features_and_roles_con
             user_email: row.user_email,
             user_phone: row.user_phone,
             created_at: row.created_at,
-
+      
             user_role_id: row.user_role_id,
             role_name: row.role_name,
-
+      
             features: [],
           });
         }
-
-        // Skip if no feature exists
-        if (!row.feature_id) {
+      
+        // Skip overridden features
+        if (row.override_feature_id) {
           continue;
         }
-
-        // Current user
+      
         const currentUser = usersMap.get(row.user_id);
-
-        // Prevent duplicate features
+      
         const alreadyAdded = currentUser.features.some(
           (feature) => Number(feature.feature_id) === Number(row.feature_id),
         );
-
+      
         if (!alreadyAdded) {
           currentUser.features.push({
             feature_id: row.feature_id,
             feature_name: row.feature_name,
             feature_val: row.feature_val,
-            is_allowed: row.feature_is_allowed,
           });
         }
       }
@@ -891,7 +888,7 @@ export const get_all_organization_members_with_accessible_features_and_roles_con
         success: false,
       });
     }
-  };
+};
 
 // Update The Feature Of The Employee :: Patch Request -> apt_user_feature_overrides.is_allowed
 export const update_feature_of_employee_controller = async (req, res) => {
@@ -964,19 +961,22 @@ export const update_feature_of_employee_controller = async (req, res) => {
       });
     }
 
-    const update_feature_of_employee_query = `
-      UPDATE apt_user_feature_overrides
-      SET is_allowed = ?
-      WHERE user_id = ? AND org_id = ? AND feature_id = ?
-    `;
-    const [update_feature_of_employee_result] = await db
-      .promise()
-      .query(update_feature_of_employee_query, [
-        is_allowed,
-        user_id,
-        org_id,
-        feature_id,
-      ]);
+    const query = `
+INSERT INTO apt_user_feature_overrides
+(user_id, org_id, feature_id, is_allowed)
+
+VALUES (?, ?, ?, ?)
+
+ON DUPLICATE KEY UPDATE
+is_allowed = VALUES(is_allowed)
+`;
+    
+    const [update_feature_of_employee_result] = await db.promise().query(query, [
+      user_id,
+      org_id,
+      feature_id,
+      is_allowed,
+    ]);
     if (update_feature_of_employee_result.affectedRows === 0) {
       return res.status(400).json({
         error: "Failed to update feature of employee",

@@ -325,23 +325,11 @@ export const get_organization_controller = async (req, res) => {
   }
 };
 export const get_org_info_controller = async (req, res) => {
-
-  // Controller Access Val -> get-organization-information
-
   try {
 
     const req_user = req.user;
-    const user_features_access = req.feature_access;
+    const user_features_access = req.accessible_features;
     
-    // Validate Feature Access
-    if (!user_features_access || !user_features_access.status) {
-      return res.status(403).json({
-        error: "Forbidden Access",
-        message: "User Features Access Not Found",
-        success: false,
-      });
-    }
-
     const {
       user_id,
       user_role_id,

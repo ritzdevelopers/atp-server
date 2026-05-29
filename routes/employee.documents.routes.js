@@ -5,7 +5,7 @@ const router = express.Router();
 import upload from "../middlewares/multer.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import user_authorization from "../middlewares/user_authorization.js";
-
+import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import {
   uploadEmployeeDocumentsController,
   updateEmployeeDocumentsController,
@@ -16,7 +16,7 @@ import {
 router.post(
   "/upload-document",
   user_validation_middleware,
-  user_authorization("admin", "hr"),
+  user_feature_access_checker("employee-management"),
   upload.any(),
   uploadEmployeeDocumentsController
 );
@@ -24,7 +24,7 @@ router.post(
 router.patch(
   "/update-document",
   user_validation_middleware,
-  user_authorization("admin", "hr"),
+  user_feature_access_checker("employee-management"),
   upload.single("file"),
   updateEmployeeDocumentsController
 );
@@ -32,14 +32,14 @@ router.patch(
 router.delete(
   "/delete-documents",
   user_validation_middleware,
-  user_authorization("admin", "hr"),
+  user_feature_access_checker("employee-management"),
   deleteEmployeeDocumentsController
 );
 
 router.get(
   "/user/:user_id/documents",
   user_validation_middleware,
-  user_authorization("admin", "hr"),
+  user_feature_access_checker("employee-management"),
   getSingleUserAllDocumentsController,
 );
 

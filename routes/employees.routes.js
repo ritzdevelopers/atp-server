@@ -13,14 +13,14 @@ import {
   markAttendanceController,
   markCheckOutAttendanceController,
 } from "../controllers/attendance.controller.js";
-
+import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 const router = Router();
 
 // Get Employees Full Information ::
 router.get("/get-employees-full-information", user_validation_middleware, getEmployeesFullInformationController);
 
 // Update Image and Name Of Employee ::
-router.patch("/update-image-and-name-of-employee", user_validation_middleware, updateImageAndNameOfEmployeeController);
+router.patch("/update-image-and-name-of-employee", user_validation_middleware, user_feature_access_checker("employee-management"), updateImageAndNameOfEmployeeController);
 
 // Mark Attendance *Check In Of Employee ::
 router.post("/mark-attendance-check-in", user_validation_middleware, markAttendanceController);

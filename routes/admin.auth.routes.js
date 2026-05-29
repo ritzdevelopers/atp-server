@@ -8,6 +8,8 @@ import { get_org_info_controller, get_organization_controller } from "../control
 import user_authorization from "../middlewares/user_authorization.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import { get_accessible_features_controller } from "../controllers/organization.features.controller.js";
+import user_feature_access from "../middlewares/user_feature_access.js";
+import req_sender_auth from "../middlewares/req_sender_auth.js";
 const router = Router();
 
 router.post("/login", user_login_controller); // :: Tested and Working Fine ::
@@ -15,8 +17,16 @@ router.post("/login", user_login_controller); // :: Tested and Working Fine ::
 
 router.get("/get-me", user_validation_middleware, get_user_controller);
 
-router.get("/get-organization", user_validation_middleware, user_feature_access_checker("get-organization-info"), get_org_info_controller);
+router.get("/get-organization", user_validation_middleware, user_feature_access_checker("get-organization"), req_sender_auth, user_feature_access, get_org_info_controller);
 
-router.get("/get-accessible-features", user_validation_middleware, user_feature_access_checker("get-accessible-features"), get_accessible_features_controller);
+router.get("/get-accessible-features", user_validation_middleware, req_sender_auth, user_feature_access, (req, res)=>{
+  const { accessible_features } = req;
+  return res.status(200).json({
+    success: true,
+    message: "Accessible Features Fetched Successfully",
+    accessible_features,
+  });
+  
+});
 
 export default router;

@@ -717,6 +717,8 @@ export const exit_completed = async (req, res) => {
       });
     }
 
+    await connection.beginTransaction();
+
     // ---------------------------------------------------
     // CHECK ACTION PERFORMER MEMBERSHIP
     // ---------------------------------------------------
@@ -732,6 +734,8 @@ export const exit_completed = async (req, res) => {
     );
 
     if (actionUser.length === 0) {
+      await connection.rollback();
+
       return res.status(403).json({
         success: false,
         message: "You are not a member of this organization",
@@ -752,6 +756,8 @@ export const exit_completed = async (req, res) => {
     );
 
     if (actionUserName.length === 0) {
+      await connection.rollback();
+
       return res.status(404).json({
         success: false,
         message: "Action performer not found",
@@ -774,6 +780,8 @@ export const exit_completed = async (req, res) => {
     );
 
     if (employee.length === 0) {
+      await connection.rollback();
+
       return res.status(404).json({
         success: false,
         message: "Employee not found",
@@ -797,6 +805,8 @@ export const exit_completed = async (req, res) => {
     );
 
     if (validMember.length === 0) {
+      await connection.rollback();
+
       return res.status(403).json({
         success: false,
         message: "Employee is not a member of this organization",
@@ -819,6 +829,8 @@ export const exit_completed = async (req, res) => {
     );
 
     if (exitProcess.length === 0) {
+      await connection.rollback();
+
       return res.status(404).json({
         success: false,
         message: "Exit process not found",
@@ -841,6 +853,8 @@ export const exit_completed = async (req, res) => {
       .toLowerCase();
 
     if (!allowedExitAppStatuses.includes(normalizedAppStatus)) {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
         message: `application_status must be one of: ${allowedExitAppStatuses.join(", ")}`,
@@ -852,6 +866,8 @@ export const exit_completed = async (req, res) => {
     // ---------------------------------------------------
 
     if (exitProcessData.application_status === "approved") {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
         message: "Exit process already completed",
@@ -865,6 +881,8 @@ export const exit_completed = async (req, res) => {
     const result = await exit_confirmation(employee_id, org_id);
 
     if (!result.success) {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
         message: result.message,
@@ -898,7 +916,25 @@ export const exit_completed = async (req, res) => {
       ],
     );
 
+    const [updateIsActiveStatusOfOrgMember] = await connection.query(`
+      UPDATE apt_org_members
+      SET is_active = 0
+      WHERE org_id = ?
+      AND user_id = ?
+      `, [org_id, employee_id]);
+
+    if (updateIsActiveStatusOfOrgMember.affectedRows < 1) {
+      await connection.rollback();
+
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update is active status of org member",
+      });
+    }
+
     if (updateResult.affectedRows < 1) {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
         message: "Failed to update application status",
@@ -929,11 +965,19 @@ export const exit_completed = async (req, res) => {
     ]);
 
     if (activityResult.affectedRows < 1) {
+      await connection.rollback();
+
       return res.status(400).json({
         success: false,
         message: "Failed to save activity log",
       });
     }
+
+    // ---------------------------------------------------
+    // COMMIT TRANSACTION
+    // ---------------------------------------------------
+
+    await connection.commit();
 
     // ---------------------------------------------------
     // RESPONSE
@@ -946,6 +990,10 @@ export const exit_completed = async (req, res) => {
     });
   } catch (error) {
     console.error("Error in exit_completed:", error);
+
+    if (connection) {
+      await connection.rollback();
+    }
 
     return res.status(500).json({
       success: false,

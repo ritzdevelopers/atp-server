@@ -1005,3 +1005,6 @@ CREATE TABLE handover_query (
 
 ALTER TABLE handover_query ADD column employee_exit_process_id int,
 add constraint emp_ex_pr_frgn_key foreign key (employee_exit_process_id) references employee_exit_process(id);
+
+
+ALTER TABLE apt_org_members ADD COLUMN is_active BOOLEAN DEFAULT 1;

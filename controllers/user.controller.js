@@ -2,6 +2,9 @@ import db, { pool } from "../db/connect.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import dotenv from "dotenv";
+import uploadToCloudinary, {
+  destroyFromCloudinary,
+} from "../config/cloudinary.js";
 
 dotenv.config();
 
@@ -479,6 +482,7 @@ export const get_all_users_controller = async (req, res) => {
     const query = `
 SELECT 
   apt_users.id AS id,
+  apt_org_members.is_active AS is_active,
   apt_org_members.id AS org_member_id,
   apt_user_roles.id AS user_role_assignment_id,
 
@@ -3364,6 +3368,173 @@ export const get_single_employee_controller = async (
   } finally {
     if (connection) {
       connection.release();
+    }
+  }
+};
+
+
+/** Derive Cloudinary `public_id` + resource type from a stored `secure_url`. */
+function cloudinaryMetaFromStoredUrl(url) {
+  if (!url || typeof url !== "string") return null;
+  try {
+    const u = new URL(url.trim());
+    const pathname = u.pathname;
+    let resource_type = "image";
+    if (pathname.includes("/raw/upload/")) resource_type = "raw";
+    else if (pathname.includes("/video/upload/")) resource_type = "video";
+
+    const marker = "/upload/";
+    const idx = pathname.indexOf(marker);
+    if (idx === -1) return null;
+
+    let rest = pathname.slice(idx + marker.length);
+    const segments = rest.split("/").filter(Boolean);
+
+    let i = 0;
+    while (i < segments.length && !/^v\d+$/i.test(segments[i])) {
+      i += 1;
+    }
+    if (i < segments.length && /^v\d+$/i.test(segments[i])) {
+      i += 1;
+    }
+
+    const pubParts = segments.slice(i);
+    if (pubParts.length === 0) return null;
+
+    const joined = pubParts.join("/");
+    const withoutExt = joined.replace(/\.[^/.]+$/, "");
+    const public_id = decodeURIComponent(withoutExt);
+
+    if (!public_id) return null;
+    return { public_id, resource_type };
+  } catch {
+    return null;
+  }
+}
+
+// Update my profile image controller ::
+export const update_my_profile_image_controller = async (req, res) => {
+  let newPublicId = null;
+  let newResourceType = "image";
+  let oldPublicId = null;
+  let oldResourceType = "image";
+  let dbUpdated = false;
+
+  try {
+    const { user_id } = req.user;
+    const { file } = req;
+
+    if (!user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!file || !file.buffer) {
+      return res.status(400).json({
+        success: false,
+        message: "No file uploaded (use multipart field name: file)",
+      });
+    }
+
+    const [userRows] = await db
+      .promise()
+      .query(`SELECT id, user_image FROM apt_users WHERE id = ? LIMIT 1`, [
+        user_id,
+      ]);
+
+    if (!userRows.length) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const existingUrl = userRows[0].user_image;
+    const oldMeta = cloudinaryMetaFromStoredUrl(
+      existingUrl != null ? String(existingUrl) : "",
+    );
+    if (oldMeta) {
+      oldPublicId = oldMeta.public_id;
+      oldResourceType = oldMeta.resource_type || "image";
+    }
+
+    let uploadResult;
+    try {
+      uploadResult = await uploadToCloudinary(
+        file.buffer,
+        "user_profile_images",
+        "image",
+      );
+    } catch (cloudErr) {
+      console.error("Profile image Cloudinary upload failed:", cloudErr);
+      return res.status(500).json({
+        success: false,
+        message: cloudErr.message || "Failed to upload image",
+      });
+    }
+
+    newPublicId = uploadResult.public_id;
+    newResourceType = uploadResult.resource_type || "image";
+    const newUrl = uploadResult.secure_url;
+
+    const [updateResult] = await db
+      .promise()
+      .query(`UPDATE apt_users SET user_image = ? WHERE id = ?`, [
+        newUrl,
+        user_id,
+      ]);
+
+    if (!updateResult || updateResult.affectedRows < 1) {
+      await destroyFromCloudinary(newPublicId, newResourceType).catch((err) =>
+        console.error(
+          "Cloudinary rollback after failed profile update:",
+          err?.message || err,
+        ),
+      );
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    dbUpdated = true;
+
+    return res.status(200).json({
+      success: true,
+      message: "Profile image updated successfully",
+      user_image: newUrl,
+    });
+  } catch (error) {
+    console.error("update_my_profile_image_controller:", error);
+
+    if (!dbUpdated && newPublicId) {
+      await destroyFromCloudinary(newPublicId, newResourceType).catch((err) =>
+        console.error(
+          "Cloudinary rollback after profile image error:",
+          err?.message || err,
+        ),
+      );
+    }
+
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (
+      dbUpdated &&
+      oldPublicId &&
+      newPublicId &&
+      oldPublicId !== newPublicId
+    ) {
+      await destroyFromCloudinary(oldPublicId, oldResourceType).catch((err) =>
+        console.error(
+          "Could not delete previous profile image from Cloudinary:",
+          err?.message || err,
+        ),
+      );
     }
   }
 };

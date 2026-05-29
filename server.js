@@ -18,6 +18,7 @@ import employeeReferencesRoutes from "./routes/employee.references.routes.js";
 import bankInfoRoutes from "./routes/bank.info.routes.js";
 import orgTeamsRoutes from "./routes/org.teams.route.js";
 import employeeExitRoutes from "./routes/employee.exit.routes.js";
+import tasksRoutes from "./routes/tasks.route.js";
 dotenv.config();
 
 const app = express();
@@ -98,6 +99,8 @@ app.use("/api/org-teams", orgTeamsRoutes);
 
 // Employee exit / offboarding workflows
 app.use("/api/employee-exit", employeeExitRoutes);
+
+app.use("/api/tasks-management", tasksRoutes);
 
 app.listen(3000, () => {
   db.connect();
