@@ -1,6 +1,10 @@
 import { Router } from "express";   
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
-import { getEmployeesFullInformationController, updateImageAndNameOfEmployeeController } from "../controllers/employees.controller.js";
+import {
+  getEmployeesFullInformationController,
+  getMyAssignedLeaveBalancesController,
+  updateImageAndNameOfEmployeeController,
+} from "../controllers/employees.controller.js";
 import {
   getMyAttendanceQueriesController,
   raiseAttendanceQueryController,
@@ -18,6 +22,12 @@ const router = Router();
 
 // Get Employees Full Information ::
 router.get("/get-employees-full-information", user_validation_middleware, getEmployeesFullInformationController);
+
+router.get(
+  "/my-assigned-leave-balances",
+  user_validation_middleware,
+  getMyAssignedLeaveBalancesController,
+);
 
 // Update Image and Name Of Employee ::
 router.patch("/update-image-and-name-of-employee", user_validation_middleware, user_feature_access_checker("employee-management"), updateImageAndNameOfEmployeeController);

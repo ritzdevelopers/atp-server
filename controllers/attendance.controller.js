@@ -2281,21 +2281,39 @@ function clampPaidLeaveNumbers(totalNum, usedNum) {
 // Leave Query Controller *Uses By Employees ::
 export const leaveQueryController = async (req, res) => {
   const { user_id, user_email } = req.user;
-  const { org_id, leave_type, start_date, end_date, reason, team_id } = req.body;
-  console.log("This is team_id", team_id);
+  const {
+    org_id,
+    leave_type_id,
+    leave_type: legacyLeaveType,
+    start_date,
+    end_date,
+    reason,
+    team_id,
+  } = req.body;
+
   if (!user_id || !user_email) {
     return res.status(400).json({
       message: "User ID and email are required",
     });
   }
 
-  if (!org_id || !leave_type || !start_date) {
+  if (!org_id || !start_date) {
     return res.status(400).json({
-      message: "org_id, leave_type and start_date are required",
+      message: "org_id and start_date are required",
     });
   }
 
-  if (!LEAVE_TYPES.includes(leave_type)) {
+  if (!leave_type_id && !legacyLeaveType) {
+    return res.status(400).json({
+      message: "leave_type_id is required",
+    });
+  }
+
+  if (
+    !leave_type_id &&
+    legacyLeaveType &&
+    !LEAVE_TYPES.includes(legacyLeaveType)
+  ) {
     return res.status(400).json({
       message: "leave_type must be full_day, half_day or short_leave",
     });
@@ -2356,17 +2374,56 @@ export const leaveQueryController = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
     const user_name = user[0].user_name;
+
+    let leaveTypeValue = legacyLeaveType;
+    let resolvedLeaveTypeId = null;
+    if (leave_type_id) {
+      resolvedLeaveTypeId = Number(leave_type_id);
+      const [assigned] = await connection.query(
+        `
+        SELECT
+          emp_lev_bal.remaining_leaves,
+          leave_types.leave_type_name
+        FROM employee_leave_balance AS emp_lev_bal
+        INNER JOIN leave_types
+          ON emp_lev_bal.leave_type_id = leave_types.id
+          AND emp_lev_bal.org_id = leave_types.org_id
+        WHERE emp_lev_bal.user_id = ?
+          AND emp_lev_bal.org_id = ?
+          AND emp_lev_bal.leave_type_id = ?
+        `,
+        [user_id, org_id, leave_type_id],
+      );
+
+      if (assigned.length === 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: "This leave type is not assigned to you",
+        });
+      }
+
+      if (Number(assigned[0].remaining_leaves || 0) <= 0) {
+        await connection.rollback();
+        return res.status(400).json({
+          message: "No remaining balance for this leave type",
+        });
+      }
+
+      leaveTypeValue = assigned[0].leave_type_name;
+    }
+
     const [insertResult] = await connection.query(
       `INSERT INTO leave_quiry (
         user_id, user_name, user_email, org_id,
-        leave_type, start_date, end_date, reason, status, team_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+        leave_type, leave_type_id, start_date, end_date, reason, status, team_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
       [
         user_id,
         user_name,
         user_email,
         org_id,
-        leave_type,
+        leaveTypeValue,
+        resolvedLeaveTypeId,
         startNorm,
         endNorm,
         reason != null && reason !== "" ? String(reason) : null,

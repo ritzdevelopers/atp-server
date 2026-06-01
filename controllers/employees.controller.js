@@ -1,5 +1,83 @@
 import db from "../db/connect.js";
 
+async function fetchEmployeeLeaveBalances(userId, orgId) {
+  const [rows] = await db.promise().query(
+    `
+    SELECT
+      emp_lev_bal.id,
+      emp_lev_bal.user_id,
+      emp_lev_bal.org_id,
+      emp_lev_bal.leave_type_id,
+      emp_lev_bal.total_leaves,
+      emp_lev_bal.used_leaves,
+      emp_lev_bal.remaining_leaves,
+      leave_types.leave_type_name
+    FROM employee_leave_balance AS emp_lev_bal
+    LEFT JOIN leave_types
+      ON emp_lev_bal.leave_type_id = leave_types.id
+      AND emp_lev_bal.org_id = leave_types.org_id
+    WHERE emp_lev_bal.user_id = ? AND emp_lev_bal.org_id = ?
+    ORDER BY leave_types.leave_type_name ASC, emp_lev_bal.leave_type_id ASC
+    `,
+    [userId, orgId],
+  );
+  return rows;
+}
+
+function summarizeLeaveBalances(rows) {
+  return rows.reduce(
+    (acc, row) => ({
+      total_leaves: acc.total_leaves + Number(row.total_leaves || 0),
+      used_leaves: acc.used_leaves + Number(row.used_leaves || 0),
+      remaining_leaves:
+        acc.remaining_leaves + Number(row.remaining_leaves || 0),
+    }),
+    { total_leaves: 0, used_leaves: 0, remaining_leaves: 0 },
+  );
+}
+
+export const getMyAssignedLeaveBalancesController = async (req, res) => {
+  try {
+    const user = req.user;
+    const org_id = req.query?.org_id ?? req.body?.org_id;
+
+    if (!user?.user_id || !org_id) {
+      return res.status(400).json({
+        message: "user_id and org_id are required",
+      });
+    }
+
+    const [member] = await db
+      .promise()
+      .query(
+        "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        [user.user_id, org_id],
+      );
+
+    if (member.length === 0) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const employeeLeaveBalances = await fetchEmployeeLeaveBalances(
+      user.user_id,
+      org_id,
+    );
+
+    return res.status(200).json({
+      success: true,
+      message:
+        employeeLeaveBalances.length === 0
+          ? "No assigned leave balances"
+          : "Assigned leave balances fetched",
+      leave_summary: summarizeLeaveBalances(employeeLeaveBalances),
+      data: employeeLeaveBalances,
+    });
+  } catch (error) {
+    console.error("getMyAssignedLeaveBalancesController:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
 export const getEmployeesFullInformationController = async (req, res) => {
   try {
     const user = req.user;
@@ -74,36 +152,11 @@ export const getEmployeesFullInformationController = async (req, res) => {
     }
 
     // 5. Per leave-type balances (employee_leave_balance + leave_types)
-    const [employeeLeaveBalances] = await db.promise().query(
-      `
-      SELECT
-        emp_lev_bal.id,
-        emp_lev_bal.user_id,
-        emp_lev_bal.org_id,
-        emp_lev_bal.leave_type_id,
-        emp_lev_bal.total_leaves,
-        emp_lev_bal.used_leaves,
-        emp_lev_bal.remaining_leaves,
-        leave_types.leave_type_name
-      FROM employee_leave_balance AS emp_lev_bal
-      LEFT JOIN leave_types
-        ON emp_lev_bal.leave_type_id = leave_types.id
-        AND emp_lev_bal.org_id = leave_types.org_id
-      WHERE emp_lev_bal.user_id = ? AND emp_lev_bal.org_id = ?
-      ORDER BY leave_types.leave_type_name ASC, emp_lev_bal.leave_type_id ASC
-      `,
-      [user.user_id, org_id],
+    const employeeLeaveBalances = await fetchEmployeeLeaveBalances(
+      user.user_id,
+      org_id,
     );
-
-    const leave_summary = employeeLeaveBalances.reduce(
-      (acc, row) => ({
-        total_leaves: acc.total_leaves + Number(row.total_leaves || 0),
-        used_leaves: acc.used_leaves + Number(row.used_leaves || 0),
-        remaining_leaves:
-          acc.remaining_leaves + Number(row.remaining_leaves || 0),
-      }),
-      { total_leaves: 0, used_leaves: 0, remaining_leaves: 0 },
-    );
+    const leave_summary = summarizeLeaveBalances(employeeLeaveBalances);
 
     // 6. FULL ATTENDANCE HISTORY
     const [attendanceHistory] = await db.promise().query(

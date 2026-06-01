@@ -428,7 +428,8 @@ CREATE TABLE leave_quiry (
     user_email VARCHAR(100) NOT NULL,
     org_id INT NOT NULL,
     team_id INT NULL, -- Consolidated inline
-    leave_type ENUM('full_day', 'half_day', 'short_leave') NOT NULL,
+    -- Store assigned leave type name (Medical, Casual, etc.)
+    leave_type VARCHAR(100) NOT NULL,
     start_date DATE NOT NULL,
     end_date DATE DEFAULT NULL,
     reason TEXT,

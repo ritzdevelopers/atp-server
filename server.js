@@ -20,6 +20,7 @@ import employeeExitRoutes from "./routes/employee.exit.routes.js";
 import tasksRoutes from "./routes/tasks.route.js";
 import leaveManagementRoutes from "./routes/leave.management.routes.js";
 import employeeSalaryRoutes from "./routes/employee.salary.routes.js";
+import { ensureLeaveQuirySchema } from "./db/ensureLeaveQuirySchema.js";
 dotenv.config();
 
 const app = express();
@@ -109,6 +110,11 @@ app.use("/api/leave-management", leaveManagementRoutes);
 // Employee salary
 app.use("/api/employee-salary", employeeSalaryRoutes);
 
-app.listen(3000, () => {
+app.listen(3000, async () => {
+  try {
+    await ensureLeaveQuirySchema();
+  } catch (err) {
+    console.error("[schema] leave_quiry migration failed:", err.message);
+  }
   console.log("Server is running on port 3000");
 });
