@@ -2,6 +2,7 @@ import { pool as db } from "../db/connect.js";
 import features_overrides from "../helper/features_overrides.js";
 import get_all_feature_access_of_org from "../helper/get_all_feature_access_of_org.js";
 import user_role_feature_access_checkpoint from "../helper/user_role_feature_access_checkpoint.js";
+import get_organization_address_helper from "../helper/get_organization_address.js";
 
 export const create_organization_controller = async (req, res) => {
   const {
@@ -222,7 +223,6 @@ export const get_organization_controller = async (req, res) => {
       });
     }
 
-
     // Fetch Organization
     const fetch_organization_query = `SELECT apt_organizations.*,  
                                     
@@ -310,7 +310,7 @@ export const get_organization_controller = async (req, res) => {
         },
         features: filtered_features,
         user: {
-          ...user_info[0], 
+          ...user_info[0],
           user_role_name: user_role_name,
         },
       },
@@ -326,16 +326,10 @@ export const get_organization_controller = async (req, res) => {
 };
 export const get_org_info_controller = async (req, res) => {
   try {
-
     const req_user = req.user;
     const user_features_access = req.accessible_features;
-    
-    const {
-      user_id,
-      user_role_id,
-      user_email,
-      user_role_name,
-    } = req_user;
+
+    const { user_id, user_role_id, user_email, user_role_name } = req_user;
 
     // Validate User
     if (!user_id || !user_role_id || !user_email) {
@@ -396,13 +390,13 @@ export const get_org_info_controller = async (req, res) => {
     }
 
     const org = organization_info[0];
-
+    const organization_address = await get_organization_address_helper(org.org_id);
+    console.log("organization_address: ", organization_address);
     return res.status(200).json({
       message: "Organization Info Fetched Successfully",
       success: true,
 
       data: {
-
         organization: {
           org_id: org.org_id,
           org_name: org.org_name,
@@ -431,19 +425,186 @@ export const get_org_info_controller = async (req, res) => {
         },
 
         user_features_access,
+        organization_address,
       },
     });
-
   } catch (error) {
-
-    console.log(
-      "Error in get_org_info_controller:",
-      error
-    );
+    console.log("Error in get_org_info_controller:", error);
 
     return res.status(500).json({
       error: "Error in get_org_info_controller",
       message: "Try Again Later Or Login Again",
+      success: false,
+    });
+  }
+};
+
+export const get_organization_address_controller = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { org_id } = req;
+
+    // Get Owner ID
+    const [ownerRows] = await db
+      .promise()
+      .query("SELECT owner_id FROM apt_organizations WHERE id = ?", [org_id]);
+    if (!ownerRows || ownerRows.length === 0) {
+      return res.status(404).json({
+        error: "Organization Not Found",
+        message: "Organization Not Found",
+        success: false,
+      });
+    }
+    if (ownerRows[0].owner_id !== user_id) {
+      return res.status(403).json({
+        error: "Unauthorized",
+        message: "Unauthorized",
+        success: false,
+      });
+    }
+    const [organization_addresses] = await db
+      .promise()
+      .query(
+        "SELECT * FROM organization_address WHERE org_id = ? ORDER BY created_at DESC, id DESC",
+        [org_id],
+      );
+    const rows = organization_addresses ?? [];
+    return res.status(200).json({
+      message:
+        rows.length === 0
+          ? "No organization addresses found"
+          : "Organization addresses fetched successfully",
+      success: true,
+      data: {
+        organization_addresses: rows,
+        /** @deprecated use organization_addresses */
+        organization_address: rows[0] ?? null,
+      },
+    });
+  } catch (error) {
+    console.log("Error in get_organization_address_controller: ", error);
+    return res.status(500).json({
+      error: "Error in get_organization_address_controller",
+      message: "Try Again Later",
+      success: false,
+    });
+  }
+};
+
+export const create_organization_address_controller = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { org_id } = req;
+
+    // Get Owner ID
+    const [ownerRows] = await db
+      .promise()
+      .query("SELECT owner_id FROM apt_organizations WHERE id = ?", [org_id]); 
+    if (!ownerRows || ownerRows.length === 0) {
+      return res.status(404).json({
+        error: "Organization Not Found",
+        message: "Organization Not Found",
+        success: false,
+      });
+    }
+    if (ownerRows[0].owner_id !== user_id) {
+      return res.status(403).json({
+        error: "Unauthorized",
+        message: "Unauthorized",
+        success: false,
+      });
+    }
+    const { city, state, district, country, zip_code, address_line } = req.body;
+    const create_organization_address_query = `
+      INSERT INTO organization_address (org_id, org_owner_id, city, state, district, country, zip_code, address_line) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `;
+    const values = [
+      org_id,
+      ownerRows[0].owner_id,
+      city,
+      state,
+      district,
+      country,
+      zip_code,
+      address_line,
+    ];
+    const [result] = await db
+      .promise()
+      .query(create_organization_address_query, values);
+    if (!result || result.affectedRows === 0) {
+      return res.status(500).json({
+        error: "Failed to create organization address",
+        message: "Try Again Later",
+        success: false,
+      });
+    }
+    return res.status(201).json({
+      message: "Organization address created successfully",
+      success: true,
+      data: {
+        organization_address_id: result.insertId,
+      },
+    });
+  } catch (error) {
+    console.log("Error in create_organization_address_controller: ", error);
+    return res.status(500).json({
+      error: "Error in create_organization_address_controller",
+      message: "Try Again Later",
+      success: false,
+    });
+  }
+};
+
+export const update_organization_address_controller = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { org_id } = req;
+
+    // Get Owner ID
+    const [ownerRows] = await db
+      .promise()
+      .query("SELECT owner_id FROM apt_organizations WHERE id = ?", [org_id]);
+    if (!ownerRows || ownerRows.length === 0) {
+      return res.status(404).json({ 
+        error: "Organization Not Found",
+        message: "Organization Not Found",
+        success: false,
+      });
+    }
+    if (ownerRows[0].owner_id !== user_id) {
+      return res.status(403).json({
+        error: "Unauthorized",
+        message: "Unauthorized",
+        success: false,
+      });
+    }
+    const {city, state, district, country, zip_code, address_line, organization_address_id} = req.body;
+    const update_organization_address_query = `
+      UPDATE organization_address SET city = ?, state = ?, district = ?, country = ?, zip_code = ?, address_line = ? WHERE org_id = ? AND org_owner_id = ? AND id = ?
+    `;
+    const values = [city, state, district, country, zip_code, address_line, org_id, ownerRows[0].owner_id, organization_address_id];
+    const [result] = await db
+      .promise()
+      .query(update_organization_address_query, values);
+    if (!result || result.affectedRows === 0) {
+      return res.status(500).json({
+        error: "Failed to update organization address",
+        message: "Try Again Later",
+        success: false,
+      });
+    }
+    return res.status(200).json({
+      message: "Organization address updated successfully",
+      success: true,
+      data: {
+        organization_address_id: result.insertId,
+      },
+    });
+  } catch (error) {
+    console.log("Error in update_organization_address_controller: ", error);
+    return res.status(500).json({
+      error: "Error in update_organization_address_controller",
+      message: "Try Again Later",
       success: false,
     });
   }

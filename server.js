@@ -18,6 +18,8 @@ import bankInfoRoutes from "./routes/bank.info.routes.js";
 import orgTeamsRoutes from "./routes/org.teams.route.js";
 import employeeExitRoutes from "./routes/employee.exit.routes.js";
 import tasksRoutes from "./routes/tasks.route.js";
+import leaveManagementRoutes from "./routes/leave.management.routes.js";
+import employeeSalaryRoutes from "./routes/employee.salary.routes.js";
 dotenv.config();
 
 const app = express();
@@ -100,6 +102,12 @@ app.use("/api/org-teams", orgTeamsRoutes);
 app.use("/api/employee-exit", employeeExitRoutes);
 
 app.use("/api/tasks-management", tasksRoutes);
+
+// Leave Management Routes
+app.use("/api/leave-management", leaveManagementRoutes);
+
+// Employee salary
+app.use("/api/employee-salary", employeeSalaryRoutes);
 
 app.listen(3000, () => {
   console.log("Server is running on port 3000");

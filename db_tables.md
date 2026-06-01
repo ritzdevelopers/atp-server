@@ -1008,3 +1008,36 @@ add constraint emp_ex_pr_frgn_key foreign key (employee_exit_process_id) referen
 
 
 ALTER TABLE apt_org_members ADD COLUMN is_active BOOLEAN DEFAULT 1;
+
+
+
+CREATE TABLE organization_address (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    org_id INT NOT NULL,
+    org_owner_id INT NOT NULL,
+
+    city VARCHAR(100) NOT NULL,
+    state VARCHAR(100) NOT NULL,
+    district VARCHAR(100) NOT NULL,
+    country VARCHAR(100) NOT NULL,
+
+    zip_code VARCHAR(20),
+    address_line TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_org_address_org
+    FOREIGN KEY (org_id)
+    REFERENCES apt_organizations(id),
+
+    CONSTRAINT fk_org_address_owner
+    FOREIGN KEY (org_owner_id)
+    REFERENCES apt_users(id)
+);
+
+ALTER TABLE apt_users
+ADD COLUMN user_image TEXT;

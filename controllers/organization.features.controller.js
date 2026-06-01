@@ -1001,7 +1001,7 @@ is_allowed = VALUES(is_allowed)
 
 export const get_accessible_features_controller = async (req, res) => { 
   try {
-     // Return All The Accessible Features Of The Organization That Is Comming From Middleware ::
+     // Return All The Accessible Features Of The Organization That Is Coming From Middleware ::
      const accessible_features = req.accessible_features;
      if(!accessible_features || accessible_features.length === 0) {
       return res.status(400).json({
