@@ -390,8 +390,7 @@ export const get_org_info_controller = async (req, res) => {
     }
 
     const org = organization_info[0];
-    const organization_address = await get_organization_address_helper(org.org_id);
-    console.log("organization_address: ", organization_address);
+    const organization_address = await get_organization_address_helper(org.org_id); 
     return res.status(200).json({
       message: "Organization Info Fetched Successfully",
       success: true,

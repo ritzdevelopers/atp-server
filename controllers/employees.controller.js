@@ -73,7 +73,39 @@ export const getEmployeesFullInformationController = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // 5. FULL ATTENDANCE HISTORY 
+    // 5. Per leave-type balances (employee_leave_balance + leave_types)
+    const [employeeLeaveBalances] = await db.promise().query(
+      `
+      SELECT
+        emp_lev_bal.id,
+        emp_lev_bal.user_id,
+        emp_lev_bal.org_id,
+        emp_lev_bal.leave_type_id,
+        emp_lev_bal.total_leaves,
+        emp_lev_bal.used_leaves,
+        emp_lev_bal.remaining_leaves,
+        leave_types.leave_type_name
+      FROM employee_leave_balance AS emp_lev_bal
+      LEFT JOIN leave_types
+        ON emp_lev_bal.leave_type_id = leave_types.id
+        AND emp_lev_bal.org_id = leave_types.org_id
+      WHERE emp_lev_bal.user_id = ? AND emp_lev_bal.org_id = ?
+      ORDER BY leave_types.leave_type_name ASC, emp_lev_bal.leave_type_id ASC
+      `,
+      [user.user_id, org_id],
+    );
+
+    const leave_summary = employeeLeaveBalances.reduce(
+      (acc, row) => ({
+        total_leaves: acc.total_leaves + Number(row.total_leaves || 0),
+        used_leaves: acc.used_leaves + Number(row.used_leaves || 0),
+        remaining_leaves:
+          acc.remaining_leaves + Number(row.remaining_leaves || 0),
+      }),
+      { total_leaves: 0, used_leaves: 0, remaining_leaves: 0 },
+    );
+
+    // 6. FULL ATTENDANCE HISTORY
     const [attendanceHistory] = await db.promise().query(
       `
       SELECT 
@@ -90,13 +122,15 @@ export const getEmployeesFullInformationController = async (req, res) => {
       [user.user_id, org_id]
     );
 
-    // 6. RESPONSE
+    // 7. RESPONSE
     return res.status(200).json({
       message: "Employee full info fetched",
       owner: owner[0],
       organization: org[0],
       employee: userInfo[0],
-      attendance_history: attendanceHistory, // ✅ full array
+      leave_summary,
+      employee_leave_balances: employeeLeaveBalances,
+      attendance_history: attendanceHistory,
     });
 
   } catch (error) {

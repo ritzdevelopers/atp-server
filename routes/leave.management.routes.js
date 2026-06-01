@@ -43,6 +43,14 @@ router.get(
   get_all_leave_types_controller,
 );
 
+/** Org members (e.g. user dashboard) — read leave types without admin feature flags */
+router.get(
+  "/org-leave-types",
+  user_validation_middleware,
+  req_sender_auth,
+  get_all_leave_types_controller,
+);
+
 router.post(
   "/create-employee-leave-balance",
   user_validation_middleware,

@@ -687,3 +687,31 @@ CREATE TABLE employee_salary (
 ALTER TABLE employee_salary
 ADD CONSTRAINT unique_employee_salary
 UNIQUE (employee_id, org_id);
+
+CREATE TABLE employee_salary (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    basic_salary DECIMAL(10,2) DEFAULT 0,
+    house_rent_allowance DECIMAL(10,2) DEFAULT 0,
+    special_allowance DECIMAL(10,2) DEFAULT 0,
+    convey DECIMAL(10,2) DEFAULT 0,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_salary_employee
+        FOREIGN KEY (employee_id)
+        REFERENCES apt_users(id),
+
+    CONSTRAINT fk_salary_org
+        FOREIGN KEY (org_id)
+        REFERENCES apt_organizations(id)
+);
+
+ALTER TABLE employee_salary
+ADD CONSTRAINT unique_employee_salary
+UNIQUE (employee_id, org_id);
