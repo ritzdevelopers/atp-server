@@ -5,7 +5,7 @@ import user_feature_access_checker from "../middlewares/user_feature_access_chec
 
 const router = Router();
 
-router.get("/get-attendance-history-of-employee", user_validation_middleware, user_feature_access_checker("company-attendance-management"), getAttendanceHistoryOfEmployeeController);
+router.get("/get-attendance-history-of-employee", user_validation_middleware, getAttendanceHistoryOfEmployeeController);
 
 router.get("/get-all-users-with-attendance-history", user_validation_middleware, user_feature_access_checker("company-attendance-management"), get_all_users_with_attendance_history);
 

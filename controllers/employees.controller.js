@@ -155,9 +155,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
     const employeeLeaveBalances = await fetchEmployeeLeaveBalances(
       user.user_id,
       org_id,
-    );
-    const leave_summary = summarizeLeaveBalances(employeeLeaveBalances);
-
+    ); 
     // 6. FULL ATTENDANCE HISTORY
     const [attendanceHistory] = await db.promise().query(
       `
@@ -180,8 +178,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
       message: "Employee full info fetched",
       owner: owner[0],
       organization: org[0],
-      employee: userInfo[0],
-      leave_summary,
+      employee: userInfo[0], 
       employee_leave_balances: employeeLeaveBalances,
       attendance_history: attendanceHistory,
     });

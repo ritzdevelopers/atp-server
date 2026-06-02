@@ -19,7 +19,7 @@ import user_authorization from "../middlewares/user_authorization.js";
 import {
   getAllAttendanceQueriesController,
   getAllLeavesController,
-  updateAttendanceQueryStatusController,
+  updateLeaveQueryStatusController,
   updateLeaveStatusController,
 } from "../controllers/leave.management.controller.js";
 import {
@@ -99,7 +99,6 @@ router.patch(
 router.get(
   "/get-user-address/:org_id/:user_id",
   user_validation_middleware,
-  user_feature_access_checker("employee-management"),
   get_single_user_address_controller,
 );
 
@@ -119,16 +118,18 @@ router.get(
 
 /** Approve or reject attendance-related query (attendance_related_queries). */
 router.patch(
-  "/update-attendance-query-status",
+  "/update-leave-query-status",
   user_validation_middleware,
+  req_sender_auth,
   user_feature_access_checker("employee-management"),
-  updateAttendanceQueryStatusController,
+  updateLeaveQueryStatusController,
 );
 
 /** Approve or reject a pending leave request (admin, HR, manager). */
 router.post(
   "/respond-to-leave",
   user_validation_middleware,
+  req_sender_auth,
   user_feature_access_checker("employee-management"),
   leaveResponseController,
 );

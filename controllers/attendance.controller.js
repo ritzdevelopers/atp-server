@@ -96,24 +96,26 @@ export const markAttendanceController = async (req, res) => {
     const user_name = userRow[0].user_name;
 
     // 4.  IP Check First Get All User Assigned IPs
-   const [userAssignedIps] = await connection.query(
-    "SELECT ip_address FROM ip_address_assignments WHERE user_id = ? AND org_id = ?",
-    [user_id, org_id],
-   );
-   if (userAssignedIps.length === 0) {
-    await connection.rollback();
-    return res.status(403).json({
-      message: "User not assigned any IP addresses",
-    });
-   } 
-   const assignedIps = userAssignedIps.map(
-    (ip) => ip.ip_address
-  );
+    const [userAssignedIps] = await connection.query(
+      "SELECT ip_address FROM ip_address_assignments WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (userAssignedIps.length === 0) {
+      await connection.rollback();
+      return res.status(403).json({
+        message: "User not assigned any IP addresses",
+      });
+    }
+    const assignedIps = userAssignedIps.map((ip) => ip.ip_address);
 
     const userIp = getUserIP(req);
- 
+
     console.log("userIp", userIp, "assignedIps", assignedIps);
-    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !assignedIps.includes(userIp)) {
+    if (
+      userIp !== "::1" &&
+      userIp !== "::ffff:127.0.0.1" &&
+      !assignedIps.includes(userIp)
+    ) {
       await connection.rollback();
 
       return res.status(403).json({
@@ -195,7 +197,11 @@ export const markAttendanceController = async (req, res) => {
 
     if (Number.isNaN(currentMinutes) || Number.isNaN(lateMinutes)) {
       await connection.rollback();
-      return res.status(400).json({ message: "Invalid time format for check-in or shift late_after" });
+      return res
+        .status(400)
+        .json({
+          message: "Invalid time format for check-in or shift late_after",
+        });
     }
 
     // ---------- STATUS ----------
@@ -232,21 +238,21 @@ export const markAttendanceController = async (req, res) => {
     );
 
     // 9. Create Attendance Log
-   const ats_res = await markAttendanceLogController(
-    connection,
-    user_id,
-    org_id,
-    attendanceResult.insertId,
-    userIp
-  ); 
-   // rollback if success is false
-   if (ats_res.success === false) {
-    await connection.rollback();
-    return res.status(400).json({
-      success: false,
-      message: ats_res.message,
-    });
-   }
+    const ats_res = await markAttendanceLogController(
+      connection,
+      user_id,
+      org_id,
+      attendanceResult.insertId,
+      userIp,
+    );
+    // rollback if success is false
+    if (ats_res.success === false) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: ats_res.message,
+      });
+    }
     await connection.commit();
 
     return res.status(200).json({
@@ -255,9 +261,7 @@ export const markAttendanceController = async (req, res) => {
       status,
       attendance_id: attendanceResult.insertId,
     });
-
   } catch (error) {
-
     if (connection) {
       await connection.rollback();
     }
@@ -268,9 +272,7 @@ export const markAttendanceController = async (req, res) => {
       success: false,
       message: "Internal server error",
     });
-
   } finally {
-
     if (connection) {
       connection.release();
     }
@@ -340,8 +342,8 @@ export const markAttendanceController = async (req, res) => {
 //       `SELECT id,
 //         DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
 //         DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
-//         attendance_status 
-//        FROM attendance 
+//         attendance_status
+//        FROM attendance
 //        WHERE user_id = ? AND org_id = ? AND attendance_date = ?`,
 //       [user_id, org_id, user_date],
 //     );
@@ -488,8 +490,8 @@ export const markAttendanceController = async (req, res) => {
 
 //     // ---------- UPDATE ----------
 //     await connection.query(
-//       `UPDATE attendance 
-//        SET attendance_status = ?, check_out = ?, working_time = ? 
+//       `UPDATE attendance
+//        SET attendance_status = ?, check_out = ?, working_time = ?
 //        WHERE id = ?`,
 //       [finalStatus, checkOutDateTime, userWorkingMinutes, existing.id],
 //     );
@@ -511,17 +513,11 @@ export const markAttendanceController = async (req, res) => {
 // };
 // Check Out Attendance Controller
 export const markCheckOutAttendanceController = async (req, res) => {
-
   const { org_id } = req.body;
 
   const { user_id, user_email, user_role_name } = req.user;
 
-  if (
-    !user_id ||
-    !user_email ||
-    !user_role_name ||
-    !org_id
-  ) {
+  if (!user_id || !user_email || !user_role_name || !org_id) {
     return res.status(400).json({
       message: "All fields are required",
     });
@@ -530,7 +526,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
   let connection;
 
   try {
-
     connection = await db.promise().getConnection();
 
     await connection.beginTransaction();
@@ -542,7 +537,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
     );
 
     if (org.length === 0) {
-
       await connection.rollback();
 
       return res.status(404).json({
@@ -559,7 +553,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
     );
 
     if (member.length === 0) {
-
       await connection.rollback();
 
       return res.status(403).json({
@@ -578,14 +571,15 @@ export const markCheckOutAttendanceController = async (req, res) => {
         message: "User not assigned any IP addresses",
       });
     }
-    const assignedIps = userAssignedIps.map(
-      (ip) => ip.ip_address
-    );
+    const assignedIps = userAssignedIps.map((ip) => ip.ip_address);
 
     const userIp = getUserIP(req);
 
-    if (userIp !== "::1" && userIp !== "::ffff:127.0.0.1" && !assignedIps.includes(userIp)) {
-
+    if (
+      userIp !== "::1" &&
+      userIp !== "::ffff:127.0.0.1" &&
+      !assignedIps.includes(userIp)
+    ) {
       await connection.rollback();
 
       return res.status(403).json({
@@ -620,7 +614,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
     );
 
     if (attendance.length === 0) {
-
       await connection.rollback();
 
       return res.status(400).json({
@@ -632,7 +625,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
 
     // Already checked out
     if (existing.check_out) {
-
       await connection.rollback();
 
       return res.status(400).json({
@@ -649,7 +641,6 @@ export const markCheckOutAttendanceController = async (req, res) => {
     );
 
     if (shiftRow.length === 0) {
-
       await connection.rollback();
 
       return res.status(404).json({
@@ -670,22 +661,15 @@ export const markCheckOutAttendanceController = async (req, res) => {
       [shift_id],
     );
 
-    const {
-      start_time,
-      end_time,
-      half_day_hours,
-      short_leave_hours,
-    } = shift[0];
+    const { start_time, end_time, half_day_hours, short_leave_hours } =
+      shift[0];
 
     // ---------- HELPERS ----------
 
     const timeToMinutes = (time) => {
-
       if (!time) return NaN;
 
-      const [h, m, s] = String(time)
-        .split(":")
-        .map(Number);
+      const [h, m, s] = String(time).split(":").map(Number);
 
       return h * 60 + m + (s || 0) / 60;
     };
@@ -696,7 +680,8 @@ export const markCheckOutAttendanceController = async (req, res) => {
     if (Number.isNaN(currentMinutes) || Number.isNaN(checkInMinutes)) {
       await connection.rollback();
       return res.status(400).json({
-        message: "Invalid check-in or checkout time for working hours calculation",
+        message:
+          "Invalid check-in or checkout time for working hours calculation",
       });
     }
 
@@ -721,44 +706,29 @@ export const markCheckOutAttendanceController = async (req, res) => {
 
     // ---------- LIMITS ----------
 
-    const halfDayMinutes =
-      timeToMinutes(half_day_hours);
+    const halfDayMinutes = timeToMinutes(half_day_hours);
 
-    const shortLeaveMinutes =
-      timeToMinutes(short_leave_hours);
+    const shortLeaveMinutes = timeToMinutes(short_leave_hours);
 
     // ---------- WORK STATUS ----------
 
     let work_status;
 
     if (userWorkingMinutes >= realWorkingMinutes) {
-
       work_status = "full_day";
-
-    } else if (
-      userWorkingMinutes >= shortLeaveMinutes
-    ) {
-
+    } else if (userWorkingMinutes >= shortLeaveMinutes) {
       work_status = "short_leave";
-
-    } else if (
-      userWorkingMinutes >= halfDayMinutes
-    ) {
-
+    } else if (userWorkingMinutes >= halfDayMinutes) {
       work_status = "half_day";
-
     } else {
-
       work_status = "absent";
     }
 
     // ---------- FINAL STATUS ----------
 
-    const previousStatus =
-      existing.attendance_status;
+    const previousStatus = existing.attendance_status;
 
-    const finalStatus =
-      `${previousStatus}_${work_status}`;
+    const finalStatus = `${previousStatus}_${work_status}`;
 
     // ---------- UPDATE ----------
 
@@ -769,23 +739,18 @@ export const markCheckOutAttendanceController = async (req, res) => {
          check_out = ?,
          working_time = ?
        WHERE id = ?`,
-      [
-        finalStatus,
-        check_out,
-        userWorkingMinutes,
-        existing.id,
-      ],
+      [finalStatus, check_out, userWorkingMinutes, existing.id],
     );
 
     // ---------- ATTENDANCE LOG ----------
 
-  const ats_res =  await markAttendanceLogController(
-    connection,
+    const ats_res = await markAttendanceLogController(
+      connection,
       user_id,
       org_id,
       existing.id,
       userIp,
-    ); 
+    );
     await connection.commit();
 
     return res.status(200).json({
@@ -794,9 +759,7 @@ export const markCheckOutAttendanceController = async (req, res) => {
       finalStatus,
       workingMinutes: userWorkingMinutes,
     });
-
   } catch (error) {
-
     if (connection) {
       await connection.rollback();
     }
@@ -807,9 +770,7 @@ export const markCheckOutAttendanceController = async (req, res) => {
       success: false,
       message: "Internal server error",
     });
-
   } finally {
-
     if (connection) {
       connection.release();
     }
@@ -862,7 +823,7 @@ export const createCompanyWorkShiftsController = async (req, res) => {
       short_leave_hours,
       is_night_shift,
       working_days,
-    } = req.body; 
+    } = req.body;
     // 3. Validate Required Fields
     if (
       !org_id ||
@@ -2395,21 +2356,16 @@ export const leaveQueryController = async (req, res) => {
         [user_id, org_id, leave_type_id],
       );
 
-      if (assigned.length === 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          message: "This leave type is not assigned to you",
-        });
-      }
+      if (assigned.length > 0) {
+        if (Number(assigned[0].remaining_leaves || 0) <= 0) {
+          await connection.rollback();
+          return res.status(400).json({
+            message: "No remaining balance for this leave type",
+          });
+        }
 
-      if (Number(assigned[0].remaining_leaves || 0) <= 0) {
-        await connection.rollback();
-        return res.status(400).json({
-          message: "No remaining balance for this leave type",
-        });
+        leaveTypeValue = assigned[0].leave_type_name;
       }
-
-      leaveTypeValue = assigned[0].leave_type_name;
     }
 
     const [insertResult] = await connection.query(
@@ -2422,7 +2378,7 @@ export const leaveQueryController = async (req, res) => {
         user_name,
         user_email,
         org_id,
-        leaveTypeValue,
+        leaveTypeValue ?? 'Unpaid Leave',
         resolvedLeaveTypeId,
         startNorm,
         endNorm,
@@ -2430,7 +2386,7 @@ export const leaveQueryController = async (req, res) => {
         team_id != null && team_id !== "" ? Number(team_id) : null,
       ],
     );
-
+    console.log("insertResult: ", insertResult);
     await connection.commit();
 
     return res.status(201).json({
@@ -2469,18 +2425,19 @@ export const getMyLeaveQueriesController = async (req, res) => {
       return res.status(400).json({ message: "org_id must be a valid number" });
     }
 
-    const [orgRows] = await db.promise().query(
-      "SELECT id FROM apt_organizations WHERE id = ?",
-      [orgIdNum],
-    );
+    const [orgRows] = await db
+      .promise()
+      .query("SELECT id FROM apt_organizations WHERE id = ?", [orgIdNum]);
     if (orgRows.length === 0) {
       return res.status(404).json({ message: "Organization not found" });
     }
 
-    const [memberRows] = await db.promise().query(
-      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, orgIdNum],
-    );
+    const [memberRows] = await db
+      .promise()
+      .query(
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        [user_id, orgIdNum],
+      );
     if (memberRows.length === 0) {
       return res
         .status(403)
@@ -2521,7 +2478,6 @@ export const getMyLeaveQueriesController = async (req, res) => {
     return res.status(500).json({ message: "Internal server error" });
   }
 };
-
 
 // Update Leave Query Controller *Uses By Employees ::
 export const updateLeaveQueryController = async (req, res) => {
@@ -3422,13 +3378,10 @@ function timeToMinutes(time) {
   return hours * 60 + minutes + seconds / 60;
 }
 
-
 export const addAttendanceLogController = async (req, res) => {
-
   let connection;
 
   try {
-
     const { user_id } = req.user;
     const { org_id, attendance_id } = req.body;
 
@@ -3448,11 +3401,10 @@ export const addAttendanceLogController = async (req, res) => {
        WHERE id = ?
        AND org_id = ?
        AND user_id = ?`,
-      [attendance_id, org_id, user_id]
+      [attendance_id, org_id, user_id],
     );
 
     if (attendance.length === 0) {
-
       await connection.rollback();
 
       return res.status(404).json({
@@ -3467,11 +3419,10 @@ export const addAttendanceLogController = async (req, res) => {
       user_id,
       org_id,
       attendance_id,
-      ip_address
+      ip_address,
     );
 
     if (!ats_res.success) {
-
       await connection.rollback();
 
       return res.status(400).json({
@@ -3487,9 +3438,7 @@ export const addAttendanceLogController = async (req, res) => {
       message: "Attendance log added successfully",
       data: ats_res,
     });
-
   } catch (error) {
-
     if (connection) {
       await connection.rollback();
     }
@@ -3500,9 +3449,7 @@ export const addAttendanceLogController = async (req, res) => {
       success: false,
       message: "Internal server error",
     });
-
   } finally {
-
     if (connection) {
       connection.release();
     }

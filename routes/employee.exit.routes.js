@@ -46,7 +46,6 @@ router.get(
   "/get-my-exit-process",
   user_validation_middleware,
   req_sender_auth,
-  user_feature_access_checker("employee-management"),
   get_my_exit_process,
 );
 

@@ -489,7 +489,7 @@ SELECT
   apt_users.user_name,
   apt_users.user_email,
   apt_users.user_phone,
-
+  apt_users.user_image,
   apt_org_members.created_at,
 
   apt_user_roles.role_id,

@@ -1,4 +1,6 @@
 import db, { pool } from "../db/connect.js";
+import calculateLeaveBalanceCount from "../helper/calculate_leave_balance_count.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
 
 export const getAllLeavesController = async (req, res) => {
   try {
@@ -467,142 +469,257 @@ export const updateAttendanceQueryCorrectionController = async (req, res) => {
 const ATTENDANCE_QUERY_STATUS_ADMIN = ["approved", "rejected"];
 
 // :: Patch --> Update Query Status (management: approve / reject attendance-related query)
-export const updateAttendanceQueryStatusController = async (req, res) => {
+export const updateLeaveQueryStatusController = async (req, res) => {
+  console.log("updateLeaveQueryStatusController");
+  let connection = null;
   try {
-    const { user_id: action_by_user_id } = req.user;
-    const { org_id } = req;
-    const {
-      employee_id,
-      query_id,
-      query_status,
-      leave_type_id,
-      reason,
-      team_id,
-    } = req.body;
-    if (
-      !action_by_user_id ||
-      !org_id ||
-      !employee_id ||
-      !query_id ||
-      !query_status ||
-      !leave_type_id ||
-      !reason ||
-      !team_id
-    ) {
-      return res.status(400).json({ message: "All fields are required" });
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const { user_id: action_user_id } = req.user;
+
+    if (!(await isEmployeeExists(action_user_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User not found" });
     }
+    const [action_user_info] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [action_user_id],
+    );
+
+    const ac_user_name = action_user_info[0].user_name;
+
+    const { org_id } = req;
+    const { query_id, query_status: updated_status } = req.body;
+
     if (
-      ATTENDANCE_QUERY_STATUS_ADMIN.includes(query_status) &&
-      query_status === "approved"
+      !ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_status)
     ) {
-      // Check If Query Is Exists OR Already Approved
-      const [existingQuery] = await db.promise().query(
-        `
-        SELECT status, leave_type FROM leave_quiry WHERE id = ? AND org_id = ?
-        `,
-        [query_id, org_id],
-      );
-      if (existingQuery.length === 0) {
-        return res.status(404).json({ message: "Query not found" });
-      }
-      const existingQueryStatus = existingQuery[0].status;
-      const existingLeaveTypeId = existingQuery[0].leave_type;
-      if (existingQueryStatus === "approved") {
-        return res.status(400).json({ message: "Query is already approved" });
-      }
+      console.log("Invalid status", updated_status);
+      await connection.rollback();
+      return res.status(400).json({ message: "Invalid status" });
+    }
 
-      // Get the Type Of Leave
-      const [leaveType] = await db.promise().query(
-        `
-        SELECT leave_type_name FROM leave_types WHERE id = ? AND org_id = ?
-        `,
-        [leave_type_id, org_id],
-      );
-      if (leaveType.length === 0) {
-        return res.status(404).json({ message: "Leave type not found" });
-      }
-      const leaveTypeName = leaveType[0].leave_type_name;
-      if (leaveTypeName !== existingLeaveTypeId) {
-        return res.status(400).json({ message: "Leave type mismatch" });
-      }
-      // Transaction Start
-      const transaction = await db.promise().transaction(async (tx) => {
-        // Update the Query Status To Approved
-        const [updateQueryResult] = await tx.query(
-          `
-          UPDATE leave_quiry SET (status, approved_by, reason, updated_at) VALUES (?, ?, ?, ?) WHERE id = ? AND org_id = ?
-        `,
-          [query_id, org_id, "approved", action_by_user_id, reason, new Date()],
-        );
-        if (!updateQueryResult.affectedRows) {
-          await tx.rollback();
-          return res
-            .status(400)
-            .json({ message: "Failed to update query status" });
-        }
-        // Update the leave_balance and employee_leave_balance
-        const [update_employee_leave_type_balance] = await tx.query(
-          `
-          UPDATE employee_leave_balance SET used_leaves = used_leaves + 1, remaining_leaves = remaining_leaves - 1 WHERE user_id = ? AND org_id = ? AND leave_type_id = ?
-          `,
-          [employee_id, org_id, leave_type_id],
-        );
-        if (!update_employee_leave_type_balance.affectedRows) {
-          await tx.rollback();
-          return res
-            .status(400)
-            .json({ message: "Failed to update employee leave balance" });
-        }
+    const year = new Date().getFullYear();
+    const month = new Date().getMonth() + 1;
 
-        // Update the main leave_balance
-        const [update_leave_balance] = await tx.query(
-          `
-          UPDATE leave_balance SET used_leaves = used_leaves + 1, remaining_leaves = remaining_leaves - 1 WHERE user_id = ? AND org_id = ?
-          `,
-          [employee_id, org_id],
-        );
-        if (!update_leave_balance.affectedRows) {
-          await tx.rollback();
-          return res
-            .status(400)
-            .json({ message: "Failed to update leave balance" });
-        }
-        // Save the Activity Log
-        const [save_activity_log] = await tx.query(
-          `
-          INSERT INTO management_activity_log (org_id, activity_type, activity_overview, performed_by, performed_by_name) VALUES (?, ?, ?, ?, ?)
+    const [leave_query_info] = await connection.query(
+      `
+      SELECT leave_type_id, 
+      start_date,
+      end_date,
+      status,
+      user_id
+      FROM leave_quiry
+      WHERE id = ? AND org_id = ?
+      `,
+      [query_id, org_id],
+    );
+    if (leave_query_info.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Query not found" });
+    }
+    const start_date = leave_query_info[0].start_date;
+    const end_date = leave_query_info[0].end_date;
+    const status = leave_query_info[0].status;
+    const leave_type_id = leave_query_info[0].leave_type_id;
+    const employee_id = leave_query_info[0].user_id;
+
+    if (status === "approved" || status === "rejected") {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Query has already been processed" });
+    }
+    if (updated_status === "rejected") {
+      // Update Leave Query Status ::
+      const [update_leave_query_status] = await connection.query(
+        `
+        UPDATE leave_quiry
+        SET status = 'rejected', rejected_by = ?
+        WHERE id = ? AND org_id = ?
         `,
-          [
-            org_id,
-            "APPROVE_LEAVE_QUERY",
-            `Approved leave query for employee ${employee_id} with leave type ${leave_type_id}`,
-            action_by_user_id,
-            action_by_user_name,
-          ],
-        );
-        if (!save_activity_log.affectedRows) {
-          await tx.rollback();
-          return res
-            .status(400)
-            .json({ message: "Failed to save activity log" });
-        }
-        // Commit the transaction
-        await tx.commit();
-        return res
-          .status(200)
-          .json({ message: "Leave query approved successfully" });
-      });
-      if (!transaction) {
+        [action_user_id, query_id, org_id],
+      );
+      if (!update_leave_query_status.affectedRows) {
+        await connection.rollback();
         return res
           .status(400)
-          .json({ message: "Failed to approve leave query" });
+          .json({ message: "Failed to update leave query status" });
       }
+      // Commit The Transaction ::
+      await connection.commit();
+      return res.status(200).json({
+        message: "Leave query rejected successfully",
+        success: true,
+      });
+    }
+    const total_days_leave =
+      Math.ceil(
+        (new Date(end_date) - new Date(start_date)) / (1000 * 60 * 60 * 24),
+      ) + 1;
+
+    // Get The Leave Type Information ::
+    const [leave_balance_info] = await connection.query(
+      `
+      SELECT remaining_leaves, used_leaves
+      FROM employee_leave_balance
+      WHERE org_id = ? AND leave_type_id = ? 
+      AND user_id = ?
+      `,
+      [org_id, leave_type_id, employee_id],
+    );
+
+    if (leave_balance_info.length > 0) {
+      const remaining_leave_balance = leave_balance_info[0].remaining_leaves;
+      const used_leave_balance = leave_balance_info[0].used_leaves;
+      if (remaining_leave_balance < total_days_leave) {
+        await connection.rollback();
+        return res.status(400).json({ message: "Insufficient leave balance" });
+      }
+      let new_remaining_leaves = remaining_leave_balance - total_days_leave;
+      let new_used_leaves = used_leave_balance + total_days_leave;
+      // Deduct The Leave Balance From Employee Leave Balance ::
+      const [update_leave_balance_result] = await connection.query(
+        `
+        UPDATE employee_leave_balance
+        SET remaining_leaves = ?, used_leaves = ?
+        WHERE org_id = ? AND leave_type_id = ? 
+        AND user_id = ?
+        `,
+        [
+          new_remaining_leaves,
+          new_used_leaves,
+          org_id,
+          leave_type_id,
+          employee_id,
+        ],
+      );
+      if (!update_leave_balance_result.affectedRows) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to deduct leave balance" });
+      }
+      // Fetch Previous Used Leaves and Remaining Leaves ::
+      const [previous_leave_balance_info] = await connection.query(
+        `
+        SELECT used_leaves, remaining_leaves
+        FROM leave_balance
+        WHERE org_id = ? 
+        AND user_id = ? AND year = ? AND month = ?
+        `,
+        [org_id, employee_id, year, month],
+      );
+      if (
+        !previous_leave_balance_info.length ||
+        previous_leave_balance_info.length === 0
+      ) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to fetch previous leave balance" });
+      }
+      const previous_used_all_leaves =
+        previous_leave_balance_info[0].used_leaves;
+      const previous_remaining_all_leaves =
+        previous_leave_balance_info[0].remaining_leaves;
+
+      let new_used_all_leaves = previous_used_all_leaves + total_days_leave;
+      let new_remaining_all_leaves =
+        previous_remaining_all_leaves - total_days_leave;
+
+      // Deduct The Leave Balance From Employee Leave Balance
+      const [update_leave_query_result] = await connection.query(
+        `
+        UPDATE leave_balance
+        SET used_leaves = ?, 
+        remaining_leaves = ?
+        WHERE org_id = ? 
+        AND user_id = ? AND year = ? AND month = ?
+        `,
+        [
+          new_used_all_leaves,
+          new_remaining_all_leaves,
+          org_id,
+          employee_id,
+          year,
+          month,
+        ],
+      );
+      if (!update_leave_query_result.affectedRows) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to update leave balance" });
+      }
+      // Update The Leave Query Status ::
+      const [update_leave_query_status] = await connection.query(
+        `
+        UPDATE leave_quiry
+        SET status = 'approved', approved_by = ?
+        WHERE id = ? AND org_id = ? AND user_id = ?
+        `,
+        [action_user_id, query_id, org_id, employee_id],
+      );
+      if (!update_leave_query_status.affectedRows) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to update leave query status" });
+      }
+      // Save The Activity Log ::
+
+      // Commit The Transaction ::
+      await connection.commit();
+
+      return res.status(200).json({
+        message: "Leave query approved successfully",
+        success: true,
+      });
+    } else {
+      // Update Leave Query Status ::
+      const [update_leave_query_status] = await connection.query(
+        `
+        UPDATE leave_quiry
+        SET status = 'approved', approved_by = ?
+        WHERE id = ? AND org_id = ? AND user_id = ?
+        `,
+        [action_user_id, query_id, org_id, employee_id],
+      );
+      if (!update_leave_query_status.affectedRows) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to update leave query status" });
+      }
+      // Save The Activity Log ::
+      // Commit The Transaction ::
+      await connection.commit();
+      return res.status(200).json({
+        message: "Leave query approved successfully",
+        success: true,
+      });
     }
   } catch (error) {
-    console.error("Error in updateAttendanceQueryStatusController: ", error);
-    return res.status(500).json({ message: "Internal server error" });
+    if (connection) {
+      await connection.rollback();
+    }
+
+    console.error("Error in updateLeaveQueryStatusController:", error);
+
+    return res.status(500).json({
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
   }
 };
+
 // :: Get -> Get all attendance-related queries (org-wide, or scoped to team_id)
 export const getAllAttendanceQueriesController = async (req, res) => {
   try {
@@ -867,18 +984,22 @@ export const create_leave_type_controller = async (req, res) => {
       return res.status(400).json({ message: "leave_type_name is required" });
     }
 
-    const [leave_type_rows] = await db.promise().query(
-      "SELECT id FROM leave_types WHERE leave_type_name = ? AND org_id = ?",
-      [leave_type_name, org_id],
-    );
+    const [leave_type_rows] = await db
+      .promise()
+      .query(
+        "SELECT id FROM leave_types WHERE leave_type_name = ? AND org_id = ?",
+        [leave_type_name, org_id],
+      );
     if (leave_type_rows.length > 0) {
       return res.status(400).json({ message: "Leave type already exists" });
     }
 
-    const [insert_leave_type_result] = await db.promise().query(
-      "INSERT INTO leave_types (leave_type_name, org_id) VALUES (?, ?)",
-      [leave_type_name, org_id],
-    );
+    const [insert_leave_type_result] = await db
+      .promise()
+      .query(
+        "INSERT INTO leave_types (leave_type_name, org_id) VALUES (?, ?)",
+        [leave_type_name, org_id],
+      );
     if (!insert_leave_type_result.affectedRows) {
       return res.status(400).json({ message: "Failed to create leave type" });
     }
@@ -902,7 +1023,10 @@ export const create_leave_type_controller = async (req, res) => {
 
     return res.status(201).json({
       message: "Leave type created successfully",
-      data: { leave_type_id: insert_leave_type_result.insertId, leave_type_name },
+      data: {
+        leave_type_id: insert_leave_type_result.insertId,
+        leave_type_name,
+      },
     });
   } catch (error) {
     console.log("Error in create_leave_type_controller: ", error);
@@ -933,28 +1057,36 @@ export const update_leave_type_controller = async (req, res) => {
       return res.status(400).json({ message: "leave_type_name is required" });
     }
 
-    const [leave_type_rows] = await db.promise().query(
-      "SELECT id, leave_type_name FROM leave_types WHERE id = ? AND org_id = ?",
-      [leave_type_id, org_id],
-    );
+    const [leave_type_rows] = await db
+      .promise()
+      .query(
+        "SELECT id, leave_type_name FROM leave_types WHERE id = ? AND org_id = ?",
+        [leave_type_id, org_id],
+      );
     if (leave_type_rows.length === 0) {
       return res.status(404).json({ message: "Leave type not found" });
     }
 
     const previousName = leave_type_rows[0].leave_type_name;
 
-    const [duplicateRows] = await db.promise().query(
-      "SELECT id FROM leave_types WHERE leave_type_name = ? AND org_id = ? AND id <> ?",
-      [leave_type_name, org_id, leave_type_id],
-    );
+    const [duplicateRows] = await db
+      .promise()
+      .query(
+        "SELECT id FROM leave_types WHERE leave_type_name = ? AND org_id = ? AND id <> ?",
+        [leave_type_name, org_id, leave_type_id],
+      );
     if (duplicateRows.length > 0) {
-      return res.status(400).json({ message: "Leave type name already in use" });
+      return res
+        .status(400)
+        .json({ message: "Leave type name already in use" });
     }
 
-    const [update_leave_type_result] = await db.promise().query(
-      "UPDATE leave_types SET leave_type_name = ? WHERE id = ? AND org_id = ?",
-      [leave_type_name, leave_type_id, org_id],
-    );
+    const [update_leave_type_result] = await db
+      .promise()
+      .query(
+        "UPDATE leave_types SET leave_type_name = ? WHERE id = ? AND org_id = ?",
+        [leave_type_name, leave_type_id, org_id],
+      );
     if (!update_leave_type_result.affectedRows) {
       return res.status(400).json({ message: "Failed to update leave type" });
     }
@@ -988,109 +1120,31 @@ export const update_leave_type_controller = async (req, res) => {
 
 export const create_employee_leave_balance_controller = async (req, res) => {
   let connection;
-
   try {
-    const { user_id: action_by_user_id } = req.user;
+    const { user_id: action_user_id } = req.user;
+    if (!(await isEmployeeExists(action_user_id))) {
+      return res.status(400).json({ message: "User is not an employee" });
+    }
     const { org_id } = req;
-
-    const { employee_id, leave_type_id, total_leaves } = req.body;
-
-    // --------------------------------------------------
-    // VALIDATIONS
-    // --------------------------------------------------
-
-    if (!action_by_user_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Action user id is required",
-      });
-    }
-
-    if (!org_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Organization id is required",
-      });
-    }
-
-    if (!employee_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Employee id is required",
-      });
-    }
-
-    if (!leave_type_id) {
-      return res.status(400).json({
-        success: false,
-        message: "Leave type id is required",
-      });
-    }
-
-    if (total_leaves === undefined || total_leaves === null) {
-      return res.status(400).json({
-        success: false,
-        message: "Total leaves is required",
-      });
-    }
-
     connection = await pool.promise().getConnection();
-
     await connection.beginTransaction();
 
-    // --------------------------------------------------
-    // CHECK ACTION USER MEMBERSHIP
-    // --------------------------------------------------
-
-    const [actionMember] = await connection.query(
-      `
-      SELECT id
-      FROM apt_org_members
-      WHERE user_id = ?
-      AND org_id = ?
-      `,
-      [action_by_user_id, org_id],
-    );
-
-    if (actionMember.length === 0) {
+    let { leave_type_id, total_leaves, employee_id } = req.body;
+    employee_id = Number(employee_id);
+    leave_type_id = Number(leave_type_id);
+    total_leaves = Number(total_leaves);
+    if (!(await isEmployeeExists(employee_id))) {
       await connection.rollback();
-
-      return res.status(403).json({
-        success: false,
-        message: "You are not a member of this organization",
-      });
+      return res.status(400).json({ message: "Employee not found" });
+    }
+    if (!Number.isFinite(leave_type_id) || !Number.isFinite(total_leaves)) {
+      return res.status(400).json({ message: "Invalid Credentials" });
     }
 
-    // --------------------------------------------------
-    // CHECK EMPLOYEE MEMBERSHIP
-    // --------------------------------------------------
-
-    const [employeeInfo] = await connection.query(
-      `
-      SELECT id
-      FROM apt_org_members
-      WHERE user_id = ?
-      AND org_id = ?
-      `,
-      [employee_id, org_id],
-    );
-
-    if (employeeInfo.length === 0) {
-      await connection.rollback();
-
-      return res.status(404).json({
-        success: false,
-        message: "Employee not found",
-      });
-    }
-
-    // --------------------------------------------------
-    // CHECK LEAVE TYPE
-    // --------------------------------------------------
-
+    // Check if Leave Type Exists ::
     const [leaveType] = await connection.query(
       `
-      SELECT *
+      SELECT id
       FROM leave_types
       WHERE id = ?
       AND org_id = ?
@@ -1102,121 +1156,164 @@ export const create_employee_leave_balance_controller = async (req, res) => {
       await connection.rollback();
 
       return res.status(404).json({
-        success: false,
         message: "Leave type not found",
       });
     }
-
-    // --------------------------------------------------
-    // CHECK EXISTING BALANCE
-    // --------------------------------------------------
-
-    const [existingBalance] = await connection.query(
+    const [existingEmployeeLeave] = await connection.query(
       `
-        SELECT id
-        FROM employee_leave_balance
-        WHERE user_id = ?
-        AND org_id = ?
-        AND leave_type_id = ?
-        `,
+      SELECT id
+      FROM employee_leave_balance
+      WHERE user_id = ?
+      AND org_id = ?
+      AND leave_type_id = ?
+      `,
       [employee_id, org_id, leave_type_id],
     );
 
-    if (existingBalance.length > 0) {
+    if (existingEmployeeLeave.length > 0) {
       await connection.rollback();
 
       return res.status(400).json({
-        success: false,
-        message: "Leave balance already assigned",
+        message: "Leave balance already assigned for this leave type",
       });
     }
 
-    // --------------------------------------------------
-    // INSERT LEAVE BALANCE
-    // --------------------------------------------------
-
-    const [insertResult] = await connection.query(
+    let year = new Date().getFullYear();
+    let month = new Date().getMonth() + 1; //last_leave_update
+    const [existing_leave_balance] = await connection.query(
       `
-        INSERT INTO employee_leave_balance
-        (
-          user_id,
-          org_id,
-          leave_type_id,
-          total_leaves,
-          used_leaves,
-          remaining_leaves
-        )
-        VALUES (?, ?, ?, ?, ?, ?)
-        `,
+      SELECT total_leaves, used_leaves
+      FROM leave_balance
+      WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?
+      `,
+      [employee_id, org_id, year, month],
+    );
+
+    // Insert Employee Leave Balance ::
+    const [insert_employee_leave_balance] = await connection.query(
+      `
+      INSERT INTO employee_leave_balance
+      (user_id, org_id, leave_type_id, total_leaves, used_leaves, remaining_leaves)
+      VALUES (?, ?, ?, ?, ?, ?)
+      `,
       [employee_id, org_id, leave_type_id, total_leaves, 0, total_leaves],
     );
 
-    if (insertResult.affectedRows < 1) {
-      throw new Error("Failed to create leave balance");
+    if (
+      !insert_employee_leave_balance ||
+      insert_employee_leave_balance.affectedRows < 1
+    ) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Failed to insert employee leave balance" });
     }
 
-    const [[actionUser]] = await connection.query(
-      "SELECT user_name FROM apt_users WHERE id = ?",
-      [action_by_user_id],
-    );
-    const [[employeeUser]] = await connection.query(
-      "SELECT user_name FROM apt_users WHERE id = ?",
-      [employee_id],
-    );
+    if (existing_leave_balance.length > 0) {
+      let previous_total_leaves = Number(
+        existing_leave_balance[0].total_leaves,
+      );
+      let previous_used_leaves = Number(existing_leave_balance[0].used_leaves);
 
-    const performedByName =
-      actionUser?.user_name ?? `User #${action_by_user_id}`;
-    const employeeName = employeeUser?.user_name ?? `User #${employee_id}`;
-    const leaveTypeName =
-      leaveType[0].leave_type_name ?? `Leave type #${leave_type_id}`;
+      let new_total_leaves = previous_total_leaves + total_leaves;
+      let new_remaining_leaves = new_total_leaves - previous_used_leaves;
 
-    const overview = `Assigned ${total_leaves} day(s) of '${leaveTypeName}' leave balance to ${employeeName}`;
-
-    const [activityResult] = await connection.query(
-      `INSERT INTO management_activity_log
-        (org_id, activity_type, activity_overview, performed_by, performed_by_name)
-       VALUES (?, ?, ?, ?, ?)`,
-      [
-        org_id,
-        "ASSIGN_LEAVE_BALANCE",
-        overview,
-        action_by_user_id,
-        performedByName,
-      ],
-    );
-
-    if (!activityResult.affectedRows) {
-      throw new Error("Failed to save management activity log");
+      const [update_leave_balance] = await connection.query(
+        `
+      UPDATE leave_balance
+      SET total_leaves = ? , remaining_leaves = ?
+      WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?
+      `,
+        [
+          new_total_leaves,
+          new_remaining_leaves,
+          employee_id,
+          org_id,
+          year,
+          month,
+        ],
+      );
+      if (!update_leave_balance || update_leave_balance.affectedRows < 1) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to update leave balance" });
+      }
+    } else {
+      // Create Fresh Leave Balance For The User
+      let f_total_leaves = total_leaves;
+      let f_used_leaves = 0;
+      let f_remaining_leaves = total_leaves;
+      const [create_fresh_leave_balance] = await connection.query(
+        `
+        INSERT INTO leave_balance
+        (user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, last_leave_update)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `,
+        [
+          employee_id,
+          org_id,
+          year,
+          month,
+          f_total_leaves,
+          f_used_leaves,
+          f_remaining_leaves,
+          new Date(),
+        ],
+      );
+      if (
+        !create_fresh_leave_balance ||
+        create_fresh_leave_balance.affectedRows < 1
+      ) {
+        await connection.rollback();
+        return res
+          .status(400)
+          .json({ message: "Failed to create fresh leave balance" });
+      }
     }
 
-    // --------------------------------------------------
-    // COMMIT
-    // --------------------------------------------------
+    // Insert Activity Log ::
+    const [action_user_name] = await connection.query(
+      `
+      SELECT user_name FROM apt_users WHERE id = ?
+      `,
+      [action_user_id],
+    );
+    if (!action_user_name || action_user_name.length < 1) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Failed to get action user name" });
+    }
+
+    const activity_query = `INSERT INTO management_activity_log
+    (org_id, activity_type, activity_overview, performed_by, performed_by_name)
+   VALUES (?, ?, ?, ?, ?)`;
+    const [save_activity_log] = await connection.query(activity_query, [
+      org_id,
+      "CREATE_EMPLOYEE_LEAVE_BALANCE",
+      `Created employee leave balance for user ${employee_id} with leave type ${leave_type_id} and total leaves ${total_leaves}`,
+      action_user_id,
+      action_user_name[0].user_name,
+    ]);
+    if (!save_activity_log || save_activity_log.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Failed to save activity log" });
+    }
 
     await connection.commit();
-
-    return res.status(201).json({
-      success: true,
-      message: "Employee leave balance created successfully",
-      data: {
-        leave_balance_id: insertResult.insertId,
-        employee_id,
-        leave_type_id,
-        total_leaves,
-        used_leaves: 0,
-        remaining_leaves: total_leaves,
-      },
-    });
+    return res
+      .status(200)
+      .json({ message: "Employee leave balance created successfully" });
   } catch (error) {
-    console.error("create_employee_leave_balance_controller:", error);
+    console.log("Error in create_employee_leave_balance_controller: ", error);
 
     if (connection) {
       await connection.rollback();
     }
 
     return res.status(500).json({
-      success: false,
-      message: error.message,
+      message: "Internal server error",
     });
   } finally {
     if (connection) {
