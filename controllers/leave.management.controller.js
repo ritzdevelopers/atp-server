@@ -468,7 +468,7 @@ export const updateAttendanceQueryCorrectionController = async (req, res) => {
 
 const ATTENDANCE_QUERY_STATUS_ADMIN = ["approved", "rejected"];
 
-// :: Patch --> Update Query Status (management: approve / reject attendance-related query)
+// :: Patch --> Update Query Status (management: approve / reject leave-related query)
 export const updateLeaveQueryStatusController = async (req, res) => {
   console.log("updateLeaveQueryStatusController");
   let connection = null;
@@ -496,9 +496,7 @@ export const updateLeaveQueryStatusController = async (req, res) => {
     const { org_id } = req;
     const { query_id, query_status: updated_status } = req.body;
 
-    if (
-      !ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_status)
-    ) {
+    if (!ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_status)) {
       console.log("Invalid status", updated_status);
       await connection.rollback();
       return res.status(400).json({ message: "Invalid status" });
@@ -610,7 +608,7 @@ export const updateLeaveQueryStatusController = async (req, res) => {
         `
         SELECT used_leaves, remaining_leaves
         FROM leave_balance
-        WHERE org_id = ? 
+        WHERE org_id = ?
         AND user_id = ? AND year = ? AND month = ?
         `,
         [org_id, employee_id, year, month],
@@ -715,6 +713,84 @@ export const updateLeaveQueryStatusController = async (req, res) => {
     return res.status(500).json({
       message: "Internal server error",
     });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+export const updateAtendanceRelatedQueryStatusController = async (req, res) => {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+    const { user_id: action_user_id } = req.user;
+    if (!(await isEmployeeExists(action_user_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User not found" });
+    }
+    const [action_user_info] = await connection.query(
+      `
+      SELECT user_name
+      FROM apt_users
+      WHERE id = ?
+      `,
+      [action_user_id],
+    );
+    const ac_user_name = action_user_info[0].user_name;
+    const { org_id } = req;
+    const { query_id, query_status: updated_status, admin_response } = req.body;
+    // Check if Already Approved Or Rejected So Return ::
+    const [attendance_query_info] = await connection.query(
+      `
+      SELECT query_status, user_id
+      FROM attendance_related_queries
+      WHERE id = ? AND org_id = ?
+      `,
+      [query_id, org_id],
+    );
+    if (attendance_query_info.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({ message: "Query not found" });
+    }
+    const query_status = attendance_query_info[0].query_status;
+    const employee_id = attendance_query_info[0].user_id;
+    if (query_status === "approved" || query_status === "rejected") {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Query has already been processed" });
+    }
+    // Update The Attendance Related Query Status ::
+    const [update_attendance_related_query_status] = await connection.query(
+      `
+      UPDATE attendance_related_queries
+      SET query_status = ?
+      WHERE id = ? AND org_id = ?
+      `,
+      [updated_status, query_id, org_id],
+    );
+    if (!update_attendance_related_query_status.affectedRows) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Failed to update attendance related query status" });
+    }
+    // Save Activity Log ::
+
+    // Commit The Transaction ::
+    await connection.commit();
+    return res
+      .status(200)
+      .json({
+        message: "Attendance related query status updated successfully",
+        success: true,
+      });
+  } catch (error) {
+    if (connection) connection.rollback();
+    console.error(
+      "Error in updateAtendanceRelatedQueryStatusController: ",
+      error,
+    );
+    return res.status(500).json({ message: "Internal server error" });
   } finally {
     if (connection) connection.release();
   }
