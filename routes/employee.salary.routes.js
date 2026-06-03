@@ -1,6 +1,7 @@
 import { Router } from "express";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import {
   register_employee_salary_controller,
@@ -14,7 +15,7 @@ router.post(
   "/register-employee-salary",
   user_validation_middleware,
   user_feature_access_checker("payroll-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   register_employee_salary_controller,
 );
 
@@ -22,7 +23,7 @@ router.get(
   "/get-employee-salary",
   user_validation_middleware,
   user_feature_access_checker("payroll-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   get_employee_salary_controller,
 );
 
@@ -30,7 +31,7 @@ router.put(
   "/update-employee-salary",
   user_validation_middleware,
   user_feature_access_checker("payroll-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   update_employee_salary_controller,
 );
 

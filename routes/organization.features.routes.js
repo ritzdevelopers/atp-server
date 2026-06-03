@@ -15,6 +15,7 @@ import {
 
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 
 const router = Router();
 
@@ -68,7 +69,7 @@ router.patch(
 router.get(
     "/get-all-organization-members-with-accessible-features-and-roles",
     user_validation_middleware,
-    req_sender_auth,
+    req_sender_auth, user_membership_checker,
     user_feature_access_checker("employees-features-management"),
     get_all_organization_members_with_accessible_features_and_roles_controller,
 );

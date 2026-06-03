@@ -2,6 +2,7 @@ import { pool } from "../db/connect.js";
 import uploadToCloudinary, {
   destroyFromCloudinary,
 } from "../config/cloudinary.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
 
 /** Matches `employee_assets.asset_type` ENUM in db_tables.md */
 const ASSET_TYPES = [
@@ -188,19 +189,7 @@ function parseUpdatesPayload(raw) {
   return null;
 }
 
-/**
- * POST multipart/form-data:
- * - `org_id` (required): organization scope
- * - `assets` (required): JSON array of objects:
- *   - `employee_id` (required)
- *   - `asset_name` (required, max 250)
- *   - `asset_type` (required, ENUM)
- *   - `asset_summary` (optional, max 600)
- *   - `handover_date_time` (optional, ISO datetime)
- *   - `image_field` (optional): multipart field name for this row's image/PDF; default `asset_image_${index}`
- *
- * Files (optional per row): upload under `image_field` or default `asset_image_0`, `asset_image_1`, ...
- */
+
 export const add_assets_controller = async (req, res) => {
   let connection;
 
@@ -488,17 +477,7 @@ export const add_assets_controller = async (req, res) => {
 };
 
 // Update Assets
-/**
- * PATCH multipart/form-data:
- * - `org_id` (required)
- * - `updates` (required): JSON array of patch objects:
- *   - `id` (required) asset row id
- *   - Optional: `employee_id`, `asset_given_by_id`, `asset_name`, `asset_summary`, `asset_type`, `handover_date_time`
- *   - Not allowed: `asset_status`, `is_returned`, `returned_to_id`
- *   - New image: multipart file field `asset_image_${index}` or custom `image_field` on the object.
- *
- * Image replace: upload new file to Cloudinary first; after DB commit, delete previous Cloudinary asset (parsed from old URL).
- */
+
 export const update_assets_controller_using_patch = async (req, res) => {
   let connection;
 
@@ -885,11 +864,6 @@ export const update_assets_controller_using_patch = async (req, res) => {
   }
 };
 
-/**
- * PATCH JSON body:
- * - `org_id` (required)
- * - `returns` (required): `[{ asset_id, returned_to_id }, ...]` (`id` accepted instead of asset_id)
- */
 export const return_assets_of_employee_controller_using_patch = async (req, res) => {
   let connection;
 
@@ -1275,3 +1249,95 @@ export const get_single_asset_controller = async (req, res) => {
     });
   }
 };
+
+
+export const get_handover_assets_assigned_to_me = async (req, res) =>{
+  try {
+        const {user_id: my_id} = req.user;
+        const org_id = req.org_id;
+        if (!org_id) {
+          return res.status(400).json({
+            success: false,
+            message: "Organization id is required",
+          });
+        }
+        if(!(await isEmployeeExists(my_id))) {
+          return res.status(404).json({
+            success: false,
+            message: "You are not a employee of this organization",
+          });
+        }
+        const [handover_assets] = await pool.promise().query(`
+          SELECT
+            hq.*,
+            ea.asset_name,
+            ea.asset_type,
+            ea.asset_summary
+          FROM handover_query hq
+          LEFT JOIN employee_assets ea
+            ON hq.asset_id = ea.id
+            AND ea.org_id = hq.org_id
+          WHERE hq.org_id = ? AND hq.manager_id = ?
+          ORDER BY hq.updated_at DESC
+          `, [org_id, my_id]);
+        if(!handover_assets.length) {
+          return res.status(200).json({
+            success: true,
+            message: "No handover items assigned to you",
+            data: { assets: [], custom_tasks: [] },
+          });
+        }
+        //id, employee_id, org_id, team_id, asset_id, custom_task_name, manager_id, handover_status,remarks, handover_date, employee_exit_process_id, created_at, updated_at
+       let all_assets = [];
+       let all_custom_tasks = [];
+       for(let asset of handover_assets) {
+          if(!asset.custom_task_name || asset.custom_task_name === null || asset.custom_task_name === undefined || asset.custom_task_name === '') { 
+            all_assets.push({
+              id: asset.id,
+              employee_id: asset.employee_id,
+              organization_id: asset.org_id,
+              team_id: asset.team_id || null,
+              asset_id: asset.asset_id,
+              asset_name: asset.asset_name ?? null,
+              asset_type: asset.asset_type ?? null,
+              asset_summary: asset.asset_summary ?? null,
+              handover_status: asset.handover_status,
+              remarks: asset.remarks || null,
+              handover_date: asset.handover_date,
+              employee_exit_process_id: asset.employee_exit_process_id,
+              created_at: asset.created_at,
+              updated_at: asset.updated_at,
+            });
+          } else {
+            all_custom_tasks.push({
+              id: asset.id,
+              employee_id: asset.employee_id,
+              organization_id: asset.org_id,
+              team_id: asset.team_id || null,
+              custom_task_name: asset.custom_task_name,
+              handover_date: asset.handover_date,
+              employee_exit_process_id: asset.employee_exit_process_id,
+              created_at: asset.created_at,
+              updated_at: asset.updated_at,
+              remarks: asset.remarks || null,
+              handover_status: asset.handover_status,
+            });
+          }
+       }
+       const normalized_handover_assets = {
+        assets: all_assets,
+        custom_tasks: all_custom_tasks,
+       };
+        return res.status(200).json({
+          success: true,
+          message: "OK",
+          data: normalized_handover_assets,
+        });
+  } catch (error) {
+    console.error("get_handover_assets_assigned_to_me:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Error loading handover assets assigned to me",
+    });
+  }
+}

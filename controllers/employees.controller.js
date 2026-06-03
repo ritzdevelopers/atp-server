@@ -106,7 +106,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
     // 3. Membership check
     const [member] = await db
       .promise()
-      .query("SELECT * FROM apt_org_members WHERE user_id = ? AND org_id = ?", [
+      .query("SELECT * FROM apt_org_members WHERE user_id = ? AND org_id = ? AND is_active = 1", [
         user.user_id,
         org_id,
       ]);

@@ -1,6 +1,7 @@
 import { Router } from "express";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import {
   create_leave_type_controller,
@@ -15,7 +16,7 @@ router.get(
   "/get-leave-types",
   user_validation_middleware,
   user_feature_access_checker("company-leave-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   get_all_leave_types_controller,
 );
 
@@ -23,7 +24,7 @@ router.post(
   "/create-leave-type",
   user_validation_middleware,
   user_feature_access_checker("company-leave-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   create_leave_type_controller,
 );
 
@@ -31,7 +32,7 @@ router.patch(
   "/update-leave-type",
   user_validation_middleware,
   user_feature_access_checker("company-leave-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   update_leave_type_controller,
 );
 
@@ -39,7 +40,7 @@ router.get(
   "/employee-leave-types",
   user_validation_middleware,
   user_feature_access_checker("employee-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   get_all_leave_types_controller,
 );
 
@@ -47,7 +48,7 @@ router.get(
 router.get(
   "/org-leave-types",
   user_validation_middleware,
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   get_all_leave_types_controller,
 );
 
@@ -55,7 +56,7 @@ router.post(
   "/create-employee-leave-balance",
   user_validation_middleware,
   user_feature_access_checker("employee-management"),
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   create_employee_leave_balance_controller,
 );
 

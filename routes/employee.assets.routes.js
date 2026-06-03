@@ -6,6 +6,8 @@ import upload from "../middlewares/multer.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import user_authorization from "../middlewares/user_authorization.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
+import req_sender_auth from "../middlewares/req_sender_auth.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 import {
   add_assets_controller,
   update_assets_controller_using_patch,
@@ -13,6 +15,7 @@ import {
   get_all_assets_controller,
   get_assets_by_user_controller,
   get_single_asset_controller,
+  get_handover_assets_assigned_to_me,
 } from "../controllers/asssets.controller.js";
 
 router.get(
@@ -57,6 +60,13 @@ router.post(
   user_feature_access_checker("employee-management"),
   upload.any(),
   add_assets_controller,
+);
+
+router.get(
+  "/handover-assigned-to-me",
+  user_validation_middleware,
+  req_sender_auth, user_membership_checker,
+  get_handover_assets_assigned_to_me,
 );
 
 export default router;

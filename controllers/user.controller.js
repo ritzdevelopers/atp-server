@@ -507,7 +507,9 @@ SELECT
   user_ip_assignments.assigned_ips AS assigned_ips,
 
   employee_exit_process.action_type AS exit_process_action_type,
-  employee_exit_process.application_status AS exit_process_application_status
+  employee_exit_process.application_status AS exit_process_application_status,
+
+  emp_team.team_id as employee_team_id
 
 FROM apt_org_members
 
@@ -554,6 +556,10 @@ AND user_ip_assignments.org_id = apt_org_members.org_id
 LEFT JOIN employee_exit_process
 ON employee_exit_process.employee_id = apt_users.id
 AND employee_exit_process.org_id = apt_org_members.org_id
+
+LEFT JOIN team_members emp_team 
+ON emp_team.user_id = apt_users.id
+AND emp_team.org_id = apt_org_members.org_id
 
 WHERE apt_org_members.org_id = ?
 AND apt_users.id != ?
@@ -3061,6 +3067,7 @@ export const get_single_employee_controller = async (
           user.user_name,
           user.user_email,
           user.user_phone,
+          user.user_image,
           user.created_at,
 
           user_address.id AS address_id,

@@ -18,7 +18,7 @@ import {
 } from "../controllers/attendance.controller.js";
 import { assign_ip_address_to_user_controller, unassign_ip_address_from_user_controller } from "../controllers/user.controller.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
-
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 const router = Router();
 
@@ -30,8 +30,8 @@ router.patch("/update-ip-address", user_validation_middleware, user_feature_acce
 router.delete("/delete-ip-address", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), deleteCompanyIPAddressController);
 
 // User IP Address Routes
-router.post("/assign-ip-address-to-user", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), req_sender_auth, assign_ip_address_to_user_controller);
-router.delete("/unassign-ip-address-from-user", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), req_sender_auth, unassign_ip_address_from_user_controller);  
+router.post("/assign-ip-address-to-user", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), req_sender_auth, user_membership_checker, assign_ip_address_to_user_controller);
+router.delete("/unassign-ip-address-from-user", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), req_sender_auth, user_membership_checker, unassign_ip_address_from_user_controller);  
 
 
 // Company shifts

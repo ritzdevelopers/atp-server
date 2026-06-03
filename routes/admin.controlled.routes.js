@@ -29,6 +29,7 @@ import {
 import req_sender_auth from "../middlewares/req_sender_auth.js";
 import upload from "../middlewares/multer.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 const router = Router();
 
 // Create Employee Route :: It Will Be Used By Admin Only
@@ -71,7 +72,7 @@ router.patch(
   update_user_name_email_phone_password_controller,
 );
 
-router.patch("/update-my-profile-image", user_validation_middleware, req_sender_auth, upload.single("file"), update_my_profile_image_controller)
+router.patch("/update-my-profile-image", user_validation_middleware, req_sender_auth, user_membership_checker, upload.single("file"), update_my_profile_image_controller)
 
 // Delete User Route :: It Will Be Used By Admin Only
 // router.delete(
@@ -120,7 +121,7 @@ router.get(
 router.patch(
   "/update-leave-query-status",
   user_validation_middleware,
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   user_feature_access_checker("employee-management"),
   updateLeaveQueryStatusController,
 );
@@ -129,7 +130,7 @@ router.patch(
 router.post(
   "/respond-to-leave",
   user_validation_middleware,
-  req_sender_auth,
+  req_sender_auth, user_membership_checker,
   user_feature_access_checker("employee-management"),
   leaveResponseController,
 );
