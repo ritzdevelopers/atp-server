@@ -716,3 +716,33 @@ CREATE TABLE employee_salary (
 ALTER TABLE employee_salary
 ADD CONSTRAINT unique_employee_salary
 UNIQUE (employee_id, org_id);
+
+
+
+
+CREATE TABLE user_attendance_logs (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+
+    user_id INT NOT NULL,
+    attendance_id INT NOT NULL,
+    org_id INT NOT NULL,
+	user_name varchar(50),
+    user_email varchar(50),
+    action_type ENUM('ENTRY', 'EXIT') NOT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id)
+        REFERENCES apt_users(id),
+
+    FOREIGN KEY (attendance_id)
+        REFERENCES attendance(id),
+
+    FOREIGN KEY (org_id)
+        REFERENCES apt_organizations(id),
+
+    INDEX idx_user (user_id),
+    INDEX idx_org (org_id),
+    INDEX idx_attendance (attendance_id),
+    INDEX idx_created_at (created_at)
+);
