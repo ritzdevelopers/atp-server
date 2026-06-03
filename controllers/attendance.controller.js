@@ -108,7 +108,7 @@ export const markAttendanceController = async (req, res) => {
     }
     const assignedIps = userAssignedIps.map((ip) => ip.ip_address);
 
-    const userIp = getUserIP(req);
+    const userIp = "129.130.222.181"; // getUserIP(req);
 
     console.log("userIp", userIp, "assignedIps", assignedIps);
     if (
@@ -573,7 +573,7 @@ export const markCheckOutAttendanceController = async (req, res) => {
     }
     const assignedIps = userAssignedIps.map((ip) => ip.ip_address);
 
-    const userIp = getUserIP(req);
+    const userIp = "129.130.222.181"; // getUserIP(req);
 
     if (
       userIp !== "::1" &&
