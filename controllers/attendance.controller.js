@@ -3412,7 +3412,7 @@ export const addAttendanceLogController = async (req, res) => {
       });
     }
 
-    const ip_address = getUserIP(req);
+    const ip_address = "129.130.222.181"; // getUserIP(req);
 
     const ats_res = await markAttendanceLogController(
       connection,
