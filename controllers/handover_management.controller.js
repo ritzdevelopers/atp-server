@@ -36,7 +36,7 @@ export const assign_handover_manager = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(action_by_user_id))) {
+    if (!(await isEmployeeExists(connection, action_by_user_id, org_id))) {
       await connection.rollback();
       return res.status(404).json({
         success: false,
@@ -44,7 +44,7 @@ export const assign_handover_manager = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(employee_id))) {
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
       await connection.rollback();
       return res.status(404).json({
         success: false,
@@ -336,7 +336,7 @@ export const update_assigned_handover_manager = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(action_by_user_id))) {
+    if (!(await isEmployeeExists(connection, action_by_user_id, org_id))) {
       await connection.rollback();
       return res.status(404).json({
         success: false,
@@ -344,7 +344,7 @@ export const update_assigned_handover_manager = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(employee_id))) {
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
       await connection.rollback();
       return res.status(404).json({
         success: false,

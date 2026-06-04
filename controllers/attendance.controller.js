@@ -1,4 +1,5 @@
 import { pool as db } from "../db/connect.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
 import { markAttendanceLogController } from "../helper/mark_attendance_logs.js";
 
 const INDIA_TIMEZONE = "Asia/Kolkata";
@@ -1295,17 +1296,10 @@ export const userAssignShiftController = async (req, res) => {
   let connection;
 
   try {
-    const user = req.user;
-
-    // 1. Check User & Role
-    if (
-      !user ||
-      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
-    ) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const { org_id, user_id, shift_id } = req.body;
+    const {user_id: action_user_id} = req.user;
+    const { org_id } = req;
+  
+    const { user_id, shift_id } = req.body;
 
     // 2. Required fields
     if (!org_id || !user_id || !shift_id) {
@@ -1320,7 +1314,7 @@ export const userAssignShiftController = async (req, res) => {
     // Get assigner display name
     const [userName] = await connection.query(
       "SELECT user_name FROM apt_users WHERE id = ?",
-      [user.user_id],
+      [action_user_id],
     );
     const user_assigned_by_name = userName[0]?.user_name;
     if (!user_assigned_by_name) {
@@ -1330,26 +1324,8 @@ export const userAssignShiftController = async (req, res) => {
       });
     }
 
-    // 3. Check Org Exists
-    const [org] = await connection.query(
-      "SELECT id FROM apt_organizations WHERE id = ?",
-      [org_id],
-    );
-
-    if (org.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({
-        message: "Organization not found",
-      });
-    }
-
     // 4. Check Target User is member of Org
-    const [member] = await connection.query(
-      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-      [user_id, org_id],
-    );
-
-    if (member.length === 0) {
+    if(!(await isEmployeeExists(connection, user_id, org_id))) {
       await connection.rollback();
       return res.status(404).json({
         message: "User is not part of this organization",
@@ -1390,7 +1366,7 @@ export const userAssignShiftController = async (req, res) => {
         `UPDATE user_shifts 
          SET shift_id = ?, user_assigned_by = ?, assigned_by_name = ?
          WHERE user_id = ? AND org_id = ?`,
-        [shift_id, user.user_id, user_assigned_by_name, user_id, org_id],
+        [shift_id, action_user_id, user_assigned_by_name, user_id, org_id],
       );
     } else {
       // first time assign
@@ -1398,7 +1374,7 @@ export const userAssignShiftController = async (req, res) => {
         `INSERT INTO user_shifts 
         (user_id, shift_id, org_id, user_assigned_by, assigned_by_name)
         VALUES (?, ?, ?, ?, ?)`,
-        [user_id, shift_id, org_id, user.user_id, user_assigned_by_name],
+        [user_id, shift_id, org_id, action_user_id, user_assigned_by_name],
       );
     }
 
@@ -1415,7 +1391,7 @@ export const userAssignShiftController = async (req, res) => {
         org_id,
         "ASSIGN_SHIFT",
         assignOverview,
-        user.user_id,
+        action_user_id,
         user_assigned_by_name,
       ],
     );
@@ -1429,6 +1405,118 @@ export const userAssignShiftController = async (req, res) => {
     if (connection) await connection.rollback();
     console.error(error);
 
+    return res.status(500).json({
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const userUnassignShiftController = async (req, res) => {
+  let connection;
+
+  try {
+    const { user_id: action_user_id } = req.user;
+    const { org_id } = req;
+    const { user_id, shift_id } = req.body;
+
+    if (!org_id || !user_id || !shift_id) {
+      return res.status(400).json({
+        message: "org_id, user_id, shift_id are required",
+      });
+    }
+
+    connection = await db.promise().getConnection();
+    await connection.beginTransaction();
+
+    const [userName] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [action_user_id],
+    );
+    const user_assigned_by_name = userName[0]?.user_name;
+    if (!user_assigned_by_name) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User name not found",
+      });
+    }
+
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User is not part of this organization",
+      });
+    }
+
+    const [shift] = await connection.query(
+      "SELECT id, shift_name FROM shifts WHERE id = ? AND org_id = ?",
+      [shift_id, org_id],
+    );
+    if (shift.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "Shift not found in this organization",
+      });
+    }
+    const shift_name = shift[0].shift_name;
+
+    const [existing] = await connection.query(
+      "SELECT id, shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?",
+      [user_id, org_id],
+    );
+    if (existing.length === 0) {
+      await connection.rollback();
+      return res.status(404).json({
+        message: "User is not assigned to any shift",
+      });
+    }
+    if (Number(existing[0].shift_id) !== Number(shift_id)) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "User is not assigned to this shift",
+      });
+    }
+
+    const [assigneeRow] = await connection.query(
+      "SELECT user_name FROM apt_users WHERE id = ?",
+      [user_id],
+    );
+    const assignee_name =
+      assigneeRow.length > 0 ? assigneeRow[0].user_name : `User ${user_id}`;
+
+    const [deleteResult] = await connection.query(
+      "DELETE FROM user_shifts WHERE user_id = ? AND org_id = ? AND shift_id = ?",
+      [user_id, org_id, shift_id],
+    );
+    if (!deleteResult.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Failed to unassign shift",
+      });
+    }
+
+    await connection.query(
+      `INSERT INTO management_activity_log 
+      (org_id, activity_type, activity_overview, performed_by, performed_by_name)
+      VALUES (?, ?, ?, ?, ?)`,
+      [
+        org_id,
+        "UNASSIGN_SHIFT",
+        `Shift '${shift_name}' unassigned from '${assignee_name}'`,
+        action_user_id,
+        user_assigned_by_name,
+      ],
+    );
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "Shift unassigned successfully",
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error(error);
     return res.status(500).json({
       message: "Internal server error",
     });

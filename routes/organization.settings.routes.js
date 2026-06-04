@@ -11,6 +11,7 @@ import {
   updateCompanyShiftController,
   deleteCompanyShiftController,
   userAssignShiftController,
+  userUnassignShiftController,
   addHolidayController,
   getAllHolidaysController,
   updateHolidayController,
@@ -39,7 +40,10 @@ router.get("/get-company-shifts", user_validation_middleware, user_feature_acces
 router.post("/create-company-shifts", user_validation_middleware, user_feature_access_checker("company-shift-management"), createCompanyWorkShiftsController);
 router.patch("/update-company-shift", user_validation_middleware, user_feature_access_checker("company-shift-management"), updateCompanyShiftController);
 router.delete("/delete-company-shift", user_validation_middleware, user_feature_access_checker("company-shift-management"), deleteCompanyShiftController);
-router.post("/assign-user-shift", user_validation_middleware, user_feature_access_checker("company-shift-management"), userAssignShiftController);
+router.post("/assign-user-shift", user_validation_middleware, req_sender_auth, user_membership_checker,
+  user_feature_access_checker("company-shift-management"), userAssignShiftController);
+router.delete("/unassign-user-shift", user_validation_middleware, req_sender_auth, user_membership_checker,
+  user_feature_access_checker("company-shift-management"), userUnassignShiftController);
 
 // Company holidays
 router.get("/get-company-holidays", user_validation_middleware, user_feature_access_checker("company-holiday-management"), getAllHolidaysController);

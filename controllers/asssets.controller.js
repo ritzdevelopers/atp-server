@@ -1252,6 +1252,7 @@ export const get_single_asset_controller = async (req, res) => {
 
 
 export const get_handover_assets_assigned_to_me = async (req, res) =>{
+  let connection = null;
   try {
         const {user_id: my_id} = req.user;
         const org_id = req.org_id;
@@ -1261,13 +1262,14 @@ export const get_handover_assets_assigned_to_me = async (req, res) =>{
             message: "Organization id is required",
           });
         }
-        if(!(await isEmployeeExists(my_id))) {
+        connection = await pool.promise().getConnection();
+        if (!(await isEmployeeExists(connection, my_id, org_id))) {
           return res.status(404).json({
             success: false,
             message: "You are not a employee of this organization",
           });
         }
-        const [handover_assets] = await pool.promise().query(`
+        const [handover_assets] = await connection.query(`
           SELECT
             hq.*,
             ea.asset_name,
@@ -1339,5 +1341,7 @@ export const get_handover_assets_assigned_to_me = async (req, res) =>{
       success: false,
       message: "Error loading handover assets assigned to me",
     });
+  } finally {
+    if (connection) connection.release();
   }
 }

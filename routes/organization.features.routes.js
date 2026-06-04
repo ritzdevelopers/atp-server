@@ -34,6 +34,7 @@ router.get(
 router.post(
     "/assign-feature-to-employee",
     user_validation_middleware,
+    req_sender_auth, user_membership_checker,
     user_feature_access_checker("employees-features-management"),
     assign_feature_to_employee_controller,
 );

@@ -2121,7 +2121,7 @@ export const assign_ip_address_to_user_controller = async (req, res) => {
 
     // Check If Employee Belongs To Organization
     const [employeeMemberResult] = await connection.query(
-      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ? AND is_active = 1",
       [employee_id, org_id],
     );
 
@@ -2134,7 +2134,7 @@ export const assign_ip_address_to_user_controller = async (req, res) => {
 
     // Check If IP Exists In Organization
     const [ipAddressResult] = await connection.query(
-      `SELECT id, ip_address, label 
+      `SELECT id, ip_address, label AS ip_label 
        FROM organization_ips 
        WHERE org_id = ? AND id = ?`,
       [org_id, ip_id],
@@ -2276,7 +2276,7 @@ export const unassign_ip_address_from_user_controller = async (req, res) => {
 
     // Check If IP Exists In Organization
     const [ipAddressResult] = await connection.query(
-      `SELECT id, ip_address, ip_label 
+      `SELECT id, ip_address, label AS ip_label 
        FROM organization_ips 
        WHERE org_id = ? AND id = ?`,
       [org_id, ip_id],

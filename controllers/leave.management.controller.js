@@ -1,6 +1,8 @@
 import db, { pool } from "../db/connect.js";
 import calculateLeaveBalanceCount from "../helper/calculate_leave_balance_count.js";
 import { isEmployeeExists } from "../helper/employee_checker.js";
+import activity_tracker from "../helper/activity_tracking.js";
+import check_team_lead from "../helper/check_team_lead.js";
 
 export const getAllLeavesController = async (req, res) => {
   try {
@@ -467,6 +469,114 @@ export const updateAttendanceQueryCorrectionController = async (req, res) => {
 };
 
 const ATTENDANCE_QUERY_STATUS_ADMIN = ["approved", "rejected"];
+export const updateAttendanceQueryStatusController = async (req, res) => {
+  let connection = null;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+    const { user_id: action_user_id } = req.user;
+    const { org_id } = req;
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User not found" });
+    }
+    // -> id, user_id, org_id, team_id, category, query_message, attendance_date, approved_by, approved_by_name, admin_response, resolved_at
+    const { employee_id, query_id, admin_response, updated_query_status, team_id } =
+      req.body;
+    if (!employee_id || !query_id || !admin_response || !updated_query_status) {
+      await connection.rollback();
+      return res.status(400).json({ message: "All fields are required" });
+    }
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Employee not found" });
+    }
+
+    const [attendance_query_info] = await connection.query(
+      `
+      SELECT query_status FROM attendance_related_queries WHERE id = ? AND org_id = ? AND user_id = ?
+      `,
+      [query_id, org_id, employee_id],
+    );
+    if (attendance_query_info.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Query not found" });
+    }
+    const query_status = attendance_query_info[0].query_status;
+    if (query_status === "approved" || query_status === "rejected") {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Query has already been processed" });
+    }
+    if (!ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_query_status)) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Invalid status" });
+    }
+    const [approved_by_info] = await connection.query(
+      `
+      SELECT id, user_name FROM apt_users WHERE id = ?
+      `,
+      [action_user_id],
+    );
+    if (approved_by_info.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User not found" });
+    }
+    // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
+    if(!team_id || team_id === null) {  
+      if(!await user_role_checker(connection, action_user_id, org_id, "hr")) {
+        await connection.rollback();
+        return res.status(400).json({ message: "You are not authorized to process this query" });
+      }
+    }
+    // Check If The User Is The Team Lead ::
+    if(!(await check_team_lead(connection, employee_id, action_user_id, org_id, team_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "You are not authorized to process this query" });
+    }
+    const approved_by_id = approved_by_info[0].id;
+    const user_name = approved_by_info[0].user_name;
+
+    const [update_attendance_query_status] = await connection.query(
+      `
+      UPDATE attendance_related_queries 
+      SET query_status = ?, approved_by = ?, approved_by_name = ?, admin_response = ?, resolved_at = NOW()
+      WHERE id = ? AND org_id = ? AND user_id = ?
+      `,
+      [
+        updated_query_status,
+        approved_by_id,
+        user_name,
+        admin_response,
+        query_id,
+        org_id,
+        employee_id,
+      ],
+    );
+    if (!update_attendance_query_status.affectedRows) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({ message: "Failed to update attendance query status" });
+    }
+
+    // Save Activity Log ::
+    await activity_tracker(connection, action_user_id, user_name, `Updated attendance query status to ${updated_query_status}`, org_id, "attendance_query_status_updated");
+    // Commit The Transaction ::
+    await connection.commit();
+    return res.status(200).json({
+      message: "Attendance query status updated successfully",
+      success: true,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.log("Error in updateAttendanceQueryStatusController: ", error);
+    return res.status(500).json({ message: "Internal server error" });
+  } finally {
+    if (connection) connection.release();
+  }
+};
 
 // :: Patch --> Update Query Status (management: approve / reject leave-related query)
 export const updateLeaveQueryStatusController = async (req, res) => {
@@ -477,8 +587,9 @@ export const updateLeaveQueryStatusController = async (req, res) => {
     await connection.beginTransaction();
 
     const { user_id: action_user_id } = req.user;
+    const { org_id } = req;
 
-    if (!(await isEmployeeExists(action_user_id))) {
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
       await connection.rollback();
       return res.status(400).json({ message: "User not found" });
     }
@@ -493,8 +604,15 @@ export const updateLeaveQueryStatusController = async (req, res) => {
 
     const ac_user_name = action_user_info[0].user_name;
 
-    const { org_id } = req;
-    const { query_id, query_status: updated_status } = req.body;
+    const { query_id, query_status: updated_status, team_id } = req.body;
+
+    // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
+    if(!team_id || team_id === null) {  
+      if(!await user_role_checker(connection, action_user_id, org_id, "hr")) {
+        await connection.rollback();
+        return res.status(400).json({ message: "You are not authorized to process this query" });
+      }
+    }
 
     if (!ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_status)) {
       console.log("Invalid status", updated_status);
@@ -532,6 +650,11 @@ export const updateLeaveQueryStatusController = async (req, res) => {
       return res
         .status(400)
         .json({ message: "Query has already been processed" });
+    }
+    // Check If The User Is The Team Lead ::
+    if(!(await check_team_lead(connection, employee_id, action_user_id, org_id, team_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "You are not authorized to process this query" });
     }
     if (updated_status === "rejected") {
       // Update Leave Query Status ::
@@ -723,7 +846,8 @@ export const updateAtendanceRelatedQueryStatusController = async (req, res) => {
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
     const { user_id: action_user_id } = req.user;
-    if (!(await isEmployeeExists(action_user_id))) {
+    const { org_id } = req;
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
       await connection.rollback();
       return res.status(400).json({ message: "User not found" });
     }
@@ -736,7 +860,6 @@ export const updateAtendanceRelatedQueryStatusController = async (req, res) => {
       [action_user_id],
     );
     const ac_user_name = action_user_info[0].user_name;
-    const { org_id } = req;
     const { query_id, query_status: updated_status, admin_response } = req.body;
     // Check if Already Approved Or Rejected So Return ::
     const [attendance_query_info] = await connection.query(
@@ -778,12 +901,10 @@ export const updateAtendanceRelatedQueryStatusController = async (req, res) => {
 
     // Commit The Transaction ::
     await connection.commit();
-    return res
-      .status(200)
-      .json({
-        message: "Attendance related query status updated successfully",
-        success: true,
-      });
+    return res.status(200).json({
+      message: "Attendance related query status updated successfully",
+      success: true,
+    });
   } catch (error) {
     if (connection) connection.rollback();
     console.error(
@@ -1198,18 +1319,20 @@ export const create_employee_leave_balance_controller = async (req, res) => {
   let connection;
   try {
     const { user_id: action_user_id } = req.user;
-    if (!(await isEmployeeExists(action_user_id))) {
-      return res.status(400).json({ message: "User is not an employee" });
-    }
     const { org_id } = req;
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User is not an employee" });
+    }
 
     let { leave_type_id, total_leaves, employee_id } = req.body;
     employee_id = Number(employee_id);
     leave_type_id = Number(leave_type_id);
     total_leaves = Number(total_leaves);
-    if (!(await isEmployeeExists(employee_id))) {
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
       await connection.rollback();
       return res.status(400).json({ message: "Employee not found" });
     }

@@ -1,4 +1,6 @@
-import db from "../db/connect.js";
+import db, { pool } from "../db/connect.js";
+import activity_tracker from "../helper/activity_tracking.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
 export const get_organization_features_controller = async (req, res) => {
   try {
     const org_id = Number(req.query?.org_id ?? req.body?.org_id);
@@ -202,86 +204,62 @@ WHERE apt_org_members.org_id = ?
 
 // Assign The Feature To The Employee ::
 export const assign_feature_to_employee_controller = async (req, res) => {
+  let connection = null;
   try {
-    const req_user = req.user;
-    console.log("req_user: ", req_user);
-    if (!req_user || req_user.user_role_name !== "admin") {
-      return res.status(400).json({
-        error: "Unauthorized Access",
-        message: "Unauthorized Access",
-        success: false,
-      });
-    }
-    const { org_id, user_id, user_role_id, feature_id } = req.body;
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const action_user_id = req.user?.user_id ?? req.user?.req_user;
+    const { org_id } = req;
+    const { user_id, user_role_id, feature_id } = req.body;
+
     if (!org_id || !user_id || !feature_id || !user_role_id) {
+      await connection.rollback();
       return res.status(400).json({
         error: "Invalid Credentials",
         message: "Invalid Credentials",
         success: false,
       });
     }
-    // Check If req_user has access to the feature :: apt_role_features
-    const query =
-      "select * from apt_role_features where role_id = ? and feature_id = ? and org_id = ?";
-    const [role_feature] = await db
-      .promise()
-      .query(query, [req_user.user_role_id, feature_id, org_id]);
-    if (!role_feature || role_feature.length === 0) {
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
       return res.status(400).json({
-        error: "Role feature not found",
-        message: "Role feature not found",
+        error: "Employee not found",
+        message: "Employee not found",
         success: false,
       });
     }
 
-    // Validate The Organization ID ::
-    const query1 = "select * from apt_organizations where id = ?";
-    const [organization] = await db
-      .promise()
-      .query(query1, [org_id, req_user.id]);
-    if (!organization || organization.length === 0) {
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      await connection.rollback();
       return res.status(400).json({
-        error: "Organization not found",
-        message: "Organization not found",
+        error: "Employee not found",
+        message: "Employee not found",
         success: false,
       });
     }
-    // Check If Organization Has The Feature :: apt_org_feature_access
-    const query2 =
-      "select * from apt_org_feature_access where org_id = ? and feature_id = ?";
-    const [feature] = await db.promise().query(query2, [org_id, feature_id]);
+
+    const [feature] = await connection.query(
+      "SELECT * FROM apt_org_feature_access WHERE org_id = ? AND feature_id = ?",
+      [org_id, feature_id],
+    );
     if (!feature || feature.length === 0) {
+      await connection.rollback();
       return res.status(400).json({
         error: "Feature not found",
         message: "Feature not found",
         success: false,
       });
     }
-    // Check If User Has The Role :: apt_user_roles
-    const query3 =
-      "select * from apt_user_roles where user_id = ? and role_id = ? and org_id = ?";
-    const [role] = await db
-      .promise()
-      .query(query3, [user_id, user_role_id, org_id]);
-    if (!role || role.length === 0) {
-      return res.status(400).json({
-        error: "Role not found",
-        message: "Role not found",
-        success: false,
-      });
-    }
 
-    // Check If User Has Already Assigned The Feature :: apt_role_features so return feature already assigned
-    const query4 = `
-    select * from apt_user_feature_overrides 
-    where user_id = ? and feature_id = ? and org_id = ?
-    `;
-
-    const [feature_assigned] = await db
-      .promise()
-      .query(query4, [user_id, feature_id, org_id]);
-
+    const [feature_assigned] = await connection.query(
+      `SELECT * FROM apt_user_feature_overrides
+       WHERE user_id = ? AND feature_id = ? AND org_id = ?`,
+      [user_id, feature_id, org_id],
+    );
     if (feature_assigned.length > 0) {
+      await connection.rollback();
       return res.status(400).json({
         error: "Feature already assigned",
         message: "Feature already assigned",
@@ -289,30 +267,34 @@ export const assign_feature_to_employee_controller = async (req, res) => {
       });
     }
 
-    // Assign The Feature To The User :: apt_role_features
-    const query5 =
-      "insert into apt_user_feature_overrides (user_id, feature_id, org_id, is_allowed) values (?, ?, ?, ?)";
-    const [feature_assigned_result] = await db
-      .promise()
-      .query(query5, [user_id, feature_id, org_id, 1]);
+    const [feature_assigned_result] = await connection.query(
+      "INSERT INTO apt_user_feature_overrides (user_id, feature_id, org_id, is_allowed) VALUES (?, ?, ?, ?)",
+      [user_id, feature_id, org_id, 1],
+    );
     if (feature_assigned_result.affectedRows === 0) {
+      await connection.rollback();
       return res.status(400).json({
         error: "Failed to assign feature",
         message: "Failed to assign feature",
         success: false,
       });
     }
+
+    await connection.commit();
     return res.status(200).json({
       message: "Feature assigned successfully to the user",
       success: true,
     });
   } catch (error) {
+    if (connection) await connection.rollback();
     console.log("Error in assign_feature_to_employee_controller: ", error);
     return res.status(500).json({
       error: "Error in assign_feature_to_employee_controller",
       message: "Try Again Later Or Login Again",
       success: false,
     });
+  } finally {
+    if (connection) connection.release();
   }
 };
 
@@ -760,8 +742,7 @@ export const get_role_feature_mappings_controller = async (req, res) => {
 
 export const get_all_organization_members_with_accessible_features_and_roles_controller =
   async (req, res) => {
-      try {
-      
+    try {
       const org_id = Number(req.query?.org_id ?? req.body?.org_id);
       if (!org_id) {
         return res.status(400).json({
@@ -828,12 +809,11 @@ LEFT JOIN apt_user_feature_overrides
 
 WHERE apt_org_members.org_id = ?
 `;
-    const [rows] = await db.promise().query(query, [org_id]);
+      const [rows] = await db.promise().query(query, [org_id]);
 
       const usersMap = new Map();
 
       for (const row of rows) {
-
         if (!usersMap.has(row.user_id)) {
           usersMap.set(row.user_id, {
             user_id: row.user_id,
@@ -841,25 +821,25 @@ WHERE apt_org_members.org_id = ?
             user_email: row.user_email,
             user_phone: row.user_phone,
             created_at: row.created_at,
-      
+
             user_role_id: row.user_role_id,
             role_name: row.role_name,
-      
+
             features: [],
           });
         }
-      
+
         // Skip overridden features
         if (row.override_feature_id) {
           continue;
         }
-      
+
         const currentUser = usersMap.get(row.user_id);
-      
+
         const alreadyAdded = currentUser.features.some(
           (feature) => Number(feature.feature_id) === Number(row.feature_id),
         );
-      
+
         if (!alreadyAdded) {
           currentUser.features.push({
             feature_id: row.feature_id,
@@ -888,7 +868,7 @@ WHERE apt_org_members.org_id = ?
         success: false,
       });
     }
-};
+  };
 
 // Update The Feature Of The Employee :: Patch Request -> apt_user_feature_overrides.is_allowed
 export const update_feature_of_employee_controller = async (req, res) => {
@@ -942,7 +922,9 @@ export const update_feature_of_employee_controller = async (req, res) => {
     if (
       !targetUserRole ||
       targetUserRole.length === 0 ||
-      String(targetUserRole[0].role_name || "").trim().toLowerCase() === "admin"
+      String(targetUserRole[0].role_name || "")
+        .trim()
+        .toLowerCase() === "admin"
     ) {
       return res.status(403).json({
         error: "Forbidden Access",
@@ -970,13 +952,10 @@ VALUES (?, ?, ?, ?)
 ON DUPLICATE KEY UPDATE
 is_allowed = VALUES(is_allowed)
 `;
-    
-    const [update_feature_of_employee_result] = await db.promise().query(query, [
-      user_id,
-      org_id,
-      feature_id,
-      is_allowed,
-    ]);
+
+    const [update_feature_of_employee_result] = await db
+      .promise()
+      .query(query, [user_id, org_id, feature_id, is_allowed]);
     if (update_feature_of_employee_result.affectedRows === 0) {
       return res.status(400).json({
         error: "Failed to update feature of employee",
@@ -998,23 +977,22 @@ is_allowed = VALUES(is_allowed)
   }
 };
 
-
-export const get_accessible_features_controller = async (req, res) => { 
+export const get_accessible_features_controller = async (req, res) => {
   try {
-     // Return All The Accessible Features Of The Organization That Is Coming From Middleware ::
-     const accessible_features = req.accessible_features;
-     if(!accessible_features || accessible_features.length === 0) {
+    // Return All The Accessible Features Of The Organization That Is Coming From Middleware ::
+    const accessible_features = req.accessible_features;
+    if (!accessible_features || accessible_features.length === 0) {
       return res.status(400).json({
         error: "No Accessible Features Found",
         message: "No Accessible Features Found",
         success: false,
       });
-     }
-     return res.status(200).json({
+    }
+    return res.status(200).json({
       success: true,
       message: "Accessible Features Fetched Successfully",
       accessible_features,
-     });
+    });
   } catch (error) {
     console.log("Error in get_accessible_features_controller: ", error);
     return res.status(500).json({
@@ -1023,4 +1001,4 @@ export const get_accessible_features_controller = async (req, res) => {
       success: false,
     });
   }
-}
+};

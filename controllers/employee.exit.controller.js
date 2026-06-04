@@ -927,8 +927,7 @@ export const exit_completed = async (req, res) => {
       });
     }
 
-    // Return All Assets
-
+    
     // Remove All Features Access From That Employee * Feature Override
     // -> Get All Feature Access Of User Role
     const [user_role] = await connection.query(
@@ -1030,6 +1029,43 @@ export const exit_completed = async (req, res) => {
         });
       }
     }
+    // Un Assign All Shifts Of The Employee
+        //--> Get All Shifts Of The Employee
+        const [all_shifts_of_employee] = await connection.query(`
+          SELECT shift_id FROM user_shifts WHERE user_id = ? AND org_id = ?
+          `, [employee_id, org_id]);
+        if (all_shifts_of_employee.length > 0) {
+          for (const shift of all_shifts_of_employee) {
+          const [update_shift_result] = await connection.query(`
+              UPDATE user_shifts SET user_id = NULL WHERE shift_id = ? AND org_id = ?
+            `, [shift.shift_id, org_id]);
+            if (update_shift_result.affectedRows < 1) {
+              await connection.rollback();
+              return res.status(400).json({
+                success: false,
+                message: "Failed to un assign shift",
+              });
+            }
+          }
+        }
+    // Un Assign All IP Addresses Of The Employee
+        //--> Get All IP Addresses Of The Employee
+        const [all_ip_addresses_of_employee] = await connection.query(`SELECT id FROM ip_address_assignments WHERE user_id = ? AND org_id = ?`, [employee_id, org_id]);
+        if (all_ip_addresses_of_employee.length > 0) {
+          for (const ip_address of all_ip_addresses_of_employee) {
+            const [update_ip_address_result] = await connection.query(`
+              DELETE FROM ip_address_assignments WHERE id = ? AND org_id = ? AND user_id = ?
+            `, [ip_address.id, org_id, employee_id]);
+            if (update_ip_address_result.affectedRows < 1) {
+              await connection.rollback();
+              return res.status(400).json({
+                success: false,
+                message: "Failed to un assign ip address",
+              });
+            }
+          }
+        }
+
     const result = await exit_confirmation(employee_id, org_id);
 
     if (!result.success) {
@@ -4631,7 +4667,7 @@ export const return_assets_completed_controller = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(action_by_user_id))) {
+    if (!(await isEmployeeExists(connection, action_by_user_id, org_id))) {
       await connection.rollback();
 
       return res.status(404).json({
@@ -4640,7 +4676,7 @@ export const return_assets_completed_controller = async (req, res) => {
       });
     }
 
-    if (!(await isEmployeeExists(employee_id))) {
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
       await connection.rollback();
 
       return res.status(404).json({

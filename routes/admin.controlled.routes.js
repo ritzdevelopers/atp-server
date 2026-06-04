@@ -19,6 +19,7 @@ import user_authorization from "../middlewares/user_authorization.js";
 import {
   getAllAttendanceQueriesController,
   getAllLeavesController,
+  updateAttendanceQueryStatusController,
   updateLeaveQueryStatusController,
   updateLeaveStatusController,
 } from "../controllers/leave.management.controller.js";
@@ -126,6 +127,8 @@ router.patch(
   updateLeaveQueryStatusController,
 );
 
+// Use By Manager Only To Update The Attendance Query Status
+router.post("/update-attendance-query-status", user_validation_middleware, req_sender_auth, user_feature_access_checker("employee-management"), updateAttendanceQueryStatusController);
 /** Approve or reject a pending leave request (admin, HR, manager). */
 router.post(
   "/respond-to-leave",

@@ -110,8 +110,6 @@ app.use("/api/leave-management", leaveManagementRoutes);
 // Employee salary
 app.use("/api/employee-salary", employeeSalaryRoutes);
 
-
-
 app.listen(3000, async () => {
   try {
     await ensureLeaveQuirySchema();
