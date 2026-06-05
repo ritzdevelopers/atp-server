@@ -1,21 +1,17 @@
-import { pool } from "../../db/connect";
+export const get_left_side_bar_features_controller = async (req, res) => {
+  try {
+    const { left_side_features } = req;
 
-export const get_left_side_bar_features_controller = async (req, res) => { 
-    let connection;
-    try {
-        connection = await pool.promise().getConnection();
-        await connection.beginTransaction();
-
-        const {user_id: action_user_id} = req.user;
-        const {org_id} = req;
-
-        
-        
-    } catch (error) {
-        
-    } finally {
-        if(connection) { 
-            connection.release();
-        }
-    }
-}
+    return res.status(200).json({
+      success: true,
+      message: "Left Side Bar Features Fetched Successfully",
+      data: left_side_features ?? [],
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+};
