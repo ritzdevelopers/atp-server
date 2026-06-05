@@ -25,10 +25,10 @@ const router = Router();
 
 
 // Company IP Address Routes
-router.post("/create-new-ip-address", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), addCompanyIPAddressController);
-router.get("/get-ip-addresses", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"),  getAllIPAddressesController);
-router.patch("/update-ip-address", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), updateCompanyIPLabelController);
-router.delete("/delete-ip-address", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), deleteCompanyIPAddressController);
+router.post("/create-new-ip-address", user_validation_middleware,  req_sender_auth, user_membership_checker, user_feature_access_checker("company-ip-addresses-management"), addCompanyIPAddressController);
+router.get("/get-ip-addresses", user_validation_middleware,  req_sender_auth, user_membership_checker, user_feature_access_checker("company-ip-addresses-management"),  getAllIPAddressesController);
+router.patch("/update-ip-address", user_validation_middleware,  req_sender_auth, user_membership_checker, user_feature_access_checker("company-ip-addresses-management"), updateCompanyIPLabelController);
+router.delete("/delete-ip-address", user_validation_middleware,  req_sender_auth, user_membership_checker, user_feature_access_checker("company-ip-addresses-management"), deleteCompanyIPAddressController);
 
 // User IP Address Routes
 router.post("/assign-ip-address-to-user", user_validation_middleware, user_feature_access_checker("company-ip-addresses-management"), req_sender_auth, user_membership_checker, assign_ip_address_to_user_controller);
@@ -46,7 +46,7 @@ router.delete("/unassign-user-shift", user_validation_middleware, req_sender_aut
   user_feature_access_checker("company-shift-management"), userUnassignShiftController);
 
 // Company holidays
-router.get("/get-company-holidays", user_validation_middleware, user_feature_access_checker("company-holiday-management"), getAllHolidaysController);
+router.get("/get-company-holidays", user_validation_middleware, req_sender_auth, user_membership_checker, user_feature_access_checker("company-holiday-management"), getAllHolidaysController);
 router.post("/create-company-holiday", user_validation_middleware, user_feature_access_checker("company-holiday-management"), addHolidayController);
 router.patch("/update-company-holiday", user_validation_middleware, user_feature_access_checker("company-holiday-management"), updateHolidayController);
 router.delete("/delete-company-holiday", user_validation_middleware, user_feature_access_checker("company-holiday-management"), deleteHolidayController);

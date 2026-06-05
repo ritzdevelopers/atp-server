@@ -746,3 +746,56 @@ CREATE TABLE user_attendance_logs (
     INDEX idx_attendance (attendance_id),
     INDEX idx_created_at (created_at)
 );
+
+
+CREATE TABLE apt_sub_features(
+	id int primary key auto_increment,
+    sub_feature_name varchar(100),
+    parent_feature_id int not null,
+    sub_feature_path varchar(110),
+    
+    foreign key (parent_feature_id) references apt_features(id)
+);
+
+CREATE TABLE apt_org_sub_features_access (
+	id int primary key auto_increment,
+    org_id int not null,
+    sub_feature_id int,
+    parent_feature_id int not null,
+    
+    
+    foreign key (org_id) references apt_organizations(id),
+    foreign key (sub_feature_id) references apt_sub_features(id),
+    foreign key (parent_feature_id) references apt_features(id),
+	UNIQUE(org_id, sub_feature_id)
+);
+
+CREATE TABLE org_emplpyee_feature_access (
+	id int primary key auto_increment,
+    employee_id int not null,
+    org_id int not null,
+    feature_id int,
+	access_permission boolean default 0, 
+    
+    foreign key (employee_id) references apt_users(id),
+    foreign key (org_id) references apt_organizations(id),
+    foreign key (feature_id) references apt_features(id),
+    UNIQUE(employee_id, feature_id)
+    
+);
+
+CREATE TABLE org_employee_sub_features_access (
+	id int primary key auto_increment,
+    employee_id int,
+    org_id int,
+    feature_id int,
+    sub_feature_id int,
+    access_permission boolean default 0,
+    
+    foreign key (employee_id) references apt_users(id),
+    foreign key (org_id) references apt_organizations(id),
+    foreign key (feature_id) references apt_features(id),
+    foreign key (sub_feature_id) references apt_sub_features(id),
+    
+    UNIQUE(employee_id, sub_feature_id)
+);

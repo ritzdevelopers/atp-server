@@ -1531,16 +1531,9 @@ export const addCompanyIPAddressController = async (req, res) => {
 
   try {
     const user = req.user;
+    const { org_id } = req;
 
-    // 1. Check User & Role (admin / hr only)
-    if (
-      !user ||
-      (user.user_role_name !== "admin" && user.user_role_name !== "hr")
-    ) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const { org_id, ip_address, label } = req.body;
+    const { ip_address, label } = req.body;
 
     // 2. Required fields
     if (!org_id || !ip_address) {
@@ -1567,7 +1560,7 @@ export const addCompanyIPAddressController = async (req, res) => {
 
     // 4. Check User is member of org
     const [member] = await connection.query(
-      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+      "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ? AND is_active = 1",
       [user.user_id, org_id],
     );
 
@@ -1870,7 +1863,7 @@ export const deleteCompanyIPAddressController = async (req, res) => {
 export const getAllIPAddressesController = async (req, res) => {
   try {
     const user = req.user;
-    const org_id = req.query?.org_id ?? req.body?.org_id;
+    const { org_id } = req;
 
     if (!user?.user_id || !org_id) {
       return res
@@ -1878,9 +1871,7 @@ export const getAllIPAddressesController = async (req, res) => {
         .json({ message: "user_id and org_id are required" });
     }
 
-    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
+  
     // 1. Check Organization Exists
     const [org] = await db
       .promise()
@@ -1893,7 +1884,7 @@ export const getAllIPAddressesController = async (req, res) => {
     const [member] = await db
       .promise()
       .query(
-        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ? AND is_active = 1 ",
         [user.user_id, org_id],
       );
     if (member.length === 0) {
@@ -1931,17 +1922,16 @@ GROUP BY oi.id`,
 
 // Add Holiday Controller
 export const addHolidayController = async (req, res) => {
-  const { org_id, holiday_name, holiday_date } = req.body;
-  const { user_id, user_role_name } = req.user;
+  const { holiday_name, holiday_date } = req.body;
+  const { org_id } = req;
+  const { user_id } = req.user;
   let connection;
 
   if (!user_id || !org_id || !holiday_name || !holiday_date) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
-  if (user_role_name !== "admin" && user_role_name !== "hr") {
-    return res.status(403).json({ message: "Forbidden" });
-  }
+ 
 
   try {
     connection = await db.promise().getConnection();
@@ -2019,18 +2009,16 @@ export const addHolidayController = async (req, res) => {
 };
 
 // Update Holiday Controller
-export const updateHolidayController = async (req, res) => {
-  const { holiday_id, holiday_name, holiday_date } = req.body;
-  const { user_id, user_role_name } = req.user;
+export const updateHolidayController = async (req, res) => {  
+  const { holiday_id, holiday_name, holiday_date } = req.body; 
+  const { user_id } = req.user;
   let connection;
 
   if (!holiday_id || !holiday_name || !holiday_date) {
     return res.status(400).json({ message: "All fields are required" });
   }
 
-  if (user_role_name !== "admin" && user_role_name !== "hr") {
-    return res.status(403).json({ message: "Forbidden" });
-  }
+ 
 
   try {
     connection = await db.promise().getConnection();
@@ -2099,17 +2087,14 @@ export const updateHolidayController = async (req, res) => {
 
 // Delete Holiday Controller
 export const deleteHolidayController = async (req, res) => {
-  const { holiday_id } = req.body;
-  const { user_id, user_role_name } = req.user;
+  const { holiday_id } = req.body; 
+  const { user_id } = req.user;
   let connection;
 
   if (!holiday_id) {
     return res.status(400).json({ message: "Holiday ID is required" });
   }
 
-  if (user_role_name !== "admin" && user_role_name !== "hr") {
-    return res.status(403).json({ message: "Forbidden" });
-  }
 
   try {
     connection = await db.promise().getConnection();
@@ -2177,32 +2162,20 @@ export const deleteHolidayController = async (req, res) => {
 export const getAllHolidaysController = async (req, res) => {
   try {
     const user = req.user;
-    const org_id = req.query?.org_id ?? req.body?.org_id;
+    const {org_id} = req;
 
     if (!user?.user_id || !org_id) {
       return res
         .status(400)
         .json({ message: "user_id and org_id are required" });
     }
-
-    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    // 1. Check Org Exists
-    const [org] = await db
-      .promise()
-      .query("SELECT id FROM apt_organizations WHERE id = ?", [org_id]);
-
-    if (org.length === 0) {
-      return res.status(404).json({ message: "Organization not found" });
-    }
+  
 
     // 2. Check Is User Valid Member of Org
     const [member] = await db
       .promise()
       .query(
-        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
+        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ? AND is_active = 1",
         [user.user_id, org_id],
       );
 

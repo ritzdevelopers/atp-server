@@ -27,7 +27,9 @@ router.get("/get-accessible-features", user_validation_middleware, req_sender_au
     message: "Accessible Features Fetched Successfully",
     accessible_features,
   });
-  
 });
+
+// Left Side Bar Feature Access Checker ::
+router.get("/get-left-side-bar-features", user_validation_middleware, req_sender_auth)
 
 export default router;

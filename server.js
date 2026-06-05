@@ -21,6 +21,7 @@ import tasksRoutes from "./routes/tasks.route.js";
 import leaveManagementRoutes from "./routes/leave.management.routes.js";
 import employeeSalaryRoutes from "./routes/employee.salary.routes.js";
 import { ensureLeaveQuirySchema } from "./db/ensureLeaveQuirySchema.js";
+import subFeatureRoutes from "./routes/super_admin/route.js";
 dotenv.config();
 
 const app = express();
@@ -109,6 +110,13 @@ app.use("/api/leave-management", leaveManagementRoutes);
 
 // Employee salary
 app.use("/api/employee-salary", employeeSalaryRoutes);
+
+// Sub Feature Routes
+app.use("/api/sub-features", subFeatureRoutes);
+
+// Organization Sub Features Access Routes ::
+
+
 
 app.listen(3000, async () => {
   try {
