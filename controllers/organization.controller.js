@@ -3,6 +3,8 @@ import features_overrides from "../helper/features_overrides.js";
 import get_all_feature_access_of_org from "../helper/get_all_feature_access_of_org.js";
 import user_role_feature_access_checkpoint from "../helper/user_role_feature_access_checkpoint.js";
 import get_organization_address_helper from "../helper/get_organization_address.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
+import errorHandling from "../utils/error.handling.js";
 
 export const create_organization_controller = async (req, res) => {
   const {
@@ -225,7 +227,7 @@ export const get_organization_controller = async (req, res) => {
 
     // Fetch Organization
     const fetch_organization_query = `SELECT apt_organizations.*,  
-                                    
+                                     
                                      apt_users.user_name AS owner_name,
                                      apt_users.user_email AS owner_email,
                                      apt_users.user_phone AS owner_phone
@@ -608,3 +610,306 @@ export const update_organization_address_controller = async (req, res) => {
     });
   }
 };
+
+export const get_organization_features_features_info_controller = async (req, res) => {
+  let connection;
+  try {
+    connection = await db.promise().getConnection();
+
+    const { org_id } = req;
+    const { user_id } = req.user;
+
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      return errorHandling(connection, res, false, "Unauthorized", new Error("Unauthorized"), 401);
+    }
+
+    const [organization_exists] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ?",
+      [org_id],
+    );
+    if (!organization_exists || organization_exists.length === 0) {
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Organization Not Found",
+        new Error("Organization Not Found"),
+        404,
+      );
+    }
+
+    const [owner_result] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ? AND owner_id = ?",
+      [org_id, user_id],
+    );
+
+    const isOrgOwner = owner_result.length > 0;
+
+    const [rows] = await connection.query(
+      isOrgOwner
+        ? `
+      SELECT
+        f.id AS parent_feature_id,
+        f.feature_name,
+        f.feature_val,
+        sf.id,
+        sf.sub_feature_name,
+        sf.sub_feature_path
+      FROM apt_org_feature_access ofa
+      INNER JOIN apt_features f
+        ON f.id = ofa.feature_id
+      LEFT JOIN apt_org_sub_features_access osfa
+        ON osfa.org_id = ofa.org_id
+        AND osfa.parent_feature_id = ofa.feature_id
+      LEFT JOIN apt_sub_features sf
+        ON sf.id = osfa.sub_feature_id
+      WHERE ofa.org_id = ?
+      ORDER BY f.id ASC, sf.id ASC
+      `
+        : `
+      SELECT
+        f.id AS parent_feature_id,
+        f.feature_name,
+        f.feature_val,
+        sf.id,
+        sf.sub_feature_name,
+        sf.sub_feature_path
+      FROM org_employee_feature_access efa
+      INNER JOIN apt_features f
+        ON f.id = efa.feature_id
+      INNER JOIN apt_org_feature_access ofa
+        ON ofa.org_id = efa.org_id
+        AND ofa.feature_id = efa.feature_id
+      LEFT JOIN org_employee_sub_features_access esfa
+        ON esfa.employee_id = efa.employee_id
+        AND esfa.feature_id = efa.feature_id
+        AND esfa.org_id = efa.org_id
+        AND esfa.access_permission = 1
+      LEFT JOIN apt_sub_features sf
+        ON sf.id = esfa.sub_feature_id
+      LEFT JOIN apt_org_sub_features_access osfa
+        ON osfa.org_id = efa.org_id
+        AND osfa.parent_feature_id = efa.feature_id
+        AND (sf.id IS NULL OR osfa.sub_feature_id = sf.id)
+      WHERE efa.employee_id = ?
+        AND efa.org_id = ?
+        AND efa.access_permission = 1
+        AND (sf.id IS NULL OR osfa.sub_feature_id IS NOT NULL)
+      ORDER BY f.id ASC, sf.id ASC
+      `,
+      isOrgOwner ? [org_id] : [user_id, org_id],
+    );
+
+    const groupedFeatures = Object.values(
+      rows.reduce((acc, curr) => {
+        const parentId = curr.parent_feature_id;
+
+        if (!acc[parentId]) {
+          acc[parentId] = {
+            parent_feature_id: curr.parent_feature_id,
+            feature_name: curr.feature_name,
+            feature_val: curr.feature_val,
+            sub_features: [],
+          };
+        }
+
+        if (curr.id) {
+          acc[parentId].sub_features.push({
+            id: curr.id,
+            sub_feature_name: curr.sub_feature_name,
+            sub_feature_path: curr.sub_feature_path,
+          });
+        }
+
+        return acc;
+      }, {}),
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Organization Features Fetched Successfully",
+      data: groupedFeatures,
+    });
+  } catch (error) {
+    console.log("Error in get_organization_features_features_info_controller: ", error);
+    return errorHandling(connection, res, false, "Internal Server Error", error, 500);
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
+
+const ALLOWED_SUB_FEATURE_PERMISSIONS = ["create", "read", "update", "delete"];
+
+function parseSubFeaturePermissions(featureAccess) {
+  if (!featureAccess || typeof featureAccess !== "string") return [];
+  return [
+    ...new Set(
+      featureAccess
+        .split("-")
+        .map((p) => p.trim().toLowerCase())
+        .filter((p) => ALLOWED_SUB_FEATURE_PERMISSIONS.includes(p)),
+    ),
+  ];
+}
+
+export const get_all_employees_with_accessible_features_and_sub_features_info_controller =
+  async (req, res) => {
+    let connection;
+    try {
+      connection = await db.promise().getConnection();
+
+      const { org_id } = req;
+      const { user_id } = req.user;
+
+      if (!(await isEmployeeExists(connection, user_id, org_id))) {
+        return errorHandling(
+          connection,
+          res,
+          false,
+          "Unauthorized",
+          new Error("Unauthorized"),
+          401,
+        );
+      }
+
+      const [organization_exists] = await connection.query(
+        "SELECT id FROM apt_organizations WHERE id = ?",
+        [org_id],
+      );
+      if (!organization_exists || organization_exists.length === 0) {
+        return errorHandling(
+          connection,
+          res,
+          false,
+          "Organization Not Found",
+          new Error("Organization Not Found"),
+          404,
+        );
+      }
+
+      const [rows] = await connection.query(
+        `
+        SELECT
+          u.id AS employee_id,
+          u.user_image AS employee_profile_image,
+          u.user_name AS employee_name,
+          u.created_at AS employee_joining_date,
+          f.id AS feature_id,
+          f.feature_name,
+          f.feature_val AS feature_value,
+          sf.id AS sub_feature_id,
+          sf.sub_feature_name,
+          sf.sub_feature_path AS sub_feature_value,
+          esfa.feature_access
+        FROM apt_org_members om
+        INNER JOIN apt_users u
+          ON u.id = om.user_id
+        LEFT JOIN org_employee_feature_access efa
+          ON efa.employee_id = om.user_id
+          AND efa.org_id = om.org_id
+          AND efa.access_permission = 1
+        LEFT JOIN apt_features f
+          ON f.id = efa.feature_id
+        LEFT JOIN apt_org_feature_access ofa
+          ON ofa.org_id = om.org_id
+          AND ofa.feature_id = f.id
+        LEFT JOIN org_employee_sub_features_access esfa
+          ON esfa.employee_id = efa.employee_id
+          AND esfa.feature_id = efa.feature_id
+          AND esfa.org_id = efa.org_id
+          AND esfa.access_permission = 1
+        LEFT JOIN apt_sub_features sf
+          ON sf.id = esfa.sub_feature_id
+        LEFT JOIN apt_org_sub_features_access osfa
+          ON osfa.org_id = om.org_id
+          AND osfa.sub_feature_id = sf.id
+          AND osfa.parent_feature_id = f.id
+        WHERE om.org_id = ?
+          AND om.is_active = 1
+          AND (f.id IS NULL OR ofa.feature_id IS NOT NULL)
+          AND (sf.id IS NULL OR osfa.sub_feature_id IS NOT NULL)
+        ORDER BY u.id ASC, f.id ASC, sf.id ASC
+        `,
+        [org_id],
+      );
+
+      const employeeMap = {};
+
+      for (const row of rows) {
+        const empId = row.employee_id;
+        if (!employeeMap[empId]) {
+          employeeMap[empId] = {
+            employee_id: row.employee_id,
+            employee_profile_image: row.employee_profile_image,
+            employee_name: row.employee_name,
+            employee_joining_date: row.employee_joining_date,
+            features_access: {},
+          };
+        }
+
+        if (!row.feature_id) continue;
+
+        const featureKey = String(row.feature_id);
+        if (!employeeMap[empId].features_access[featureKey]) {
+          employeeMap[empId].features_access[featureKey] = {
+            feature_id: row.feature_id,
+            feature_name: row.feature_name,
+            feature_value: row.feature_value,
+            sub_features: {},
+          };
+        }
+
+        if (!row.sub_feature_id) continue;
+
+        const subKey = String(row.sub_feature_id);
+        if (
+          !employeeMap[empId].features_access[featureKey].sub_features[subKey]
+        ) {
+          employeeMap[empId].features_access[featureKey].sub_features[subKey] = {
+            sub_feature_id: row.sub_feature_id,
+            sub_feature_name: row.sub_feature_name,
+            sub_feature_value: row.sub_feature_value,
+            sub_feature_permissions: parseSubFeaturePermissions(row.feature_access),
+          };
+        }
+      }
+
+      const data = Object.values(employeeMap).map((employee) => ({
+        employee_id: employee.employee_id,
+        employee_profile_image: employee.employee_profile_image,
+        employee_name: employee.employee_name,
+        employee_joining_date: employee.employee_joining_date,
+        features_access: Object.values(employee.features_access).map((feature) => ({
+          feature_id: feature.feature_id,
+          feature_name: feature.feature_name,
+          feature_value: feature.feature_value,
+          sub_features: Object.values(feature.sub_features),
+        })),
+      }));
+
+      return res.status(200).json({
+        success: true,
+        message: "Employees With Accessible Features Fetched Successfully",
+        data,
+      });
+    } catch (error) {
+      console.log(
+        "Error in get_all_employees_with_accessible_features_and_sub_features_info_controller: ",
+        error,
+      );
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Internal Server Error",
+        error,
+        500,
+      );
+    } finally {
+      if (connection) {
+        connection.release();
+      }
+    }
+  };

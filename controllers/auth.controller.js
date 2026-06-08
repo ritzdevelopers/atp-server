@@ -63,11 +63,13 @@ export const get_user_controller = async (req, res) => {
         org_email: row.org_email,
         org_phone: row.org_phone,
         created_at: row.org_created_at,
+        dashboard_type: "management",
       }));
 
       return res.status(200).json({
         admin_details,
         org_details,
+        dashboard_type: "management",
         success: true,
         role: user_role_name,
         message: "Admin Details Fetched Successfully",
@@ -86,12 +88,16 @@ export const get_user_controller = async (req, res) => {
             o.org_email,
             o.org_name,
             o.created_at AS org_created_at,
-            r.role_name
+            r.role_name,
+            COALESCE(dm.dashboard_type, 'employee') AS dashboard_type
           FROM apt_users u
-          INNER JOIN apt_org_members m ON m.user_id = u.id
+          INNER JOIN apt_org_members m ON m.user_id = u.id AND m.is_active = 1
           INNER JOIN apt_organizations o ON o.id = m.org_id
           INNER JOIN apt_user_roles ur ON ur.user_id = u.id AND ur.org_id = o.id
           INNER JOIN apt_roles r ON r.id = ur.role_id
+          LEFT JOIN dashboard_management dm
+            ON dm.employee_id = u.id
+            AND dm.org_id = o.id
           WHERE u.id = ? AND u.user_email = ?
           ORDER BY m.org_id ASC
           LIMIT 1
@@ -116,16 +122,20 @@ export const get_user_controller = async (req, res) => {
         created_at: row.created_at,
       };
 
+      const dashboard_type = row.dashboard_type || "employee";
+
       const org_details = {
         id: row.org_id,
         org_email: row.org_email,
         org_name: row.org_name,
         created_at: row.org_created_at,
+        dashboard_type,
       };
 
       return res.status(200).json({
         user_details,
         org_details,
+        dashboard_type,
         success: true,
         role: row.role_name,
         message: "HR/Manager Details Fetched Successfully",

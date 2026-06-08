@@ -383,8 +383,11 @@ export const get_all_the_organizations_controller = async (req, res) => {
 
 export const get_all_the_features_controller = async (req, res) => {
   try {
-    // Get All Features
-    const [features] = await db.promise().query("SELECT id, feature_name, feature_val FROM apt_features");
+    const [features] = await db.promise().query(`
+      SELECT id, feature_name, feature_val
+      FROM apt_features
+      ORDER BY id ASC
+    `);
     if(!features || features.length === 0) {
       return res.status(400).json({
         error: "No Features Found",

@@ -82,7 +82,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
   try {
     const user = req.user;
     const org_id = req.query?.org_id ?? req.body?.org_id;
-
+    
     if (!user?.user_id || !org_id) {
       return res.status(400).json({ message: "user_id and org_id are required" });
     }
@@ -172,7 +172,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
       `,
       [user.user_id, org_id]
     );
-
+    
     // 7. RESPONSE
     return res.status(200).json({
       message: "Employee full info fetched",

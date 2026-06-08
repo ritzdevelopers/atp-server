@@ -770,7 +770,7 @@ CREATE TABLE apt_org_sub_features_access (
 	UNIQUE(org_id, sub_feature_id)
 );
 
-CREATE TABLE org_emplpyee_feature_access (
+CREATE TABLE org_employee_feature_access (
 	id int primary key auto_increment,
     employee_id int not null,
     org_id int not null,
@@ -798,4 +798,33 @@ CREATE TABLE org_employee_sub_features_access (
     foreign key (sub_feature_id) references apt_sub_features(id),
     
     UNIQUE(employee_id, sub_feature_id)
+);
+
+ALTER TABLE org_employee_sub_features_access ADD COLUMN feature_access VARCHAR(250);
+
+
+CREATE TABLE dashboard_management (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT,
+    org_id INT,
+
+    dashboard_type ENUM('management', 'employee')
+    DEFAULT 'employee',
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    UNIQUE KEY unique_employee_org (
+        employee_id,
+        org_id
+    ),
+
+    FOREIGN KEY (employee_id)
+        REFERENCES apt_users(id),
+
+    FOREIGN KEY (org_id)
+        REFERENCES apt_organizations(id)
 );

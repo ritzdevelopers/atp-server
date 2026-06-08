@@ -16,9 +16,10 @@ const employee_feature_checker = (
       const { org_id } = req;
 
       // Employee Exists
-      if (!(await isEmployeeExists(connection, action_user))) {
+      if (!(await isEmployeeExists(connection, action_user, org_id))) {
         return errorHandling(
           connection,
+          res,
           false,
           "Employee Not Found",
           new Error("Employee Not Found"),
@@ -30,6 +31,7 @@ const employee_feature_checker = (
       if (!org_id) {
         return errorHandling(
           connection,
+          res,
           false,
           "Organization Not Found",
           new Error("Organization Not Found"),
@@ -43,7 +45,7 @@ const employee_feature_checker = (
         SELECT id
         FROM apt_organizations
         WHERE id = ?
-        AND admin_id = ?
+        AND owner_id = ?
         `,
         [org_id, action_user]
       );
@@ -61,7 +63,7 @@ const employee_feature_checker = (
           emp_sub_feature.access_permission AS sub_feature_permission,
 
           features.id AS feature_id,
-          features.feature_value,
+          features.feature_val AS feature_value,
 
           sub_features.id AS sub_feature_id,
           sub_features.sub_feature_path
@@ -81,7 +83,7 @@ const employee_feature_checker = (
 
         WHERE emp_feature.employee_id = ?
           AND emp_feature.org_id = ?
-          AND features.feature_value = ?
+          AND features.feature_val = ?
           AND sub_features.sub_feature_path = ?
         `,
         [
@@ -91,10 +93,10 @@ const employee_feature_checker = (
           sub_feature_value,
         ]
       );
-
       if (permission_result.length === 0) {
         return errorHandling(
           connection,
+          res,
           false,
           "Access Denied",
           new Error("Feature/Sub Feature Not Assigned"),
@@ -102,14 +104,14 @@ const employee_feature_checker = (
         );
       }
 
-      const permission = permission_result[0];
-
+      const permission = permission_result[0]; 
       if (
         Number(permission.feature_permission) !== 1 ||
         Number(permission.sub_feature_permission) !== 1
       ) {
         return errorHandling(
           connection,
+          res,
           false,
           "Access Denied",
           new Error("Permission Denied"),
@@ -130,6 +132,7 @@ const employee_feature_checker = (
 
       return errorHandling(
         connection,
+        res,
         false,
         "Internal Server Error",
         error,

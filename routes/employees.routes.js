@@ -18,10 +18,12 @@ import {
   markCheckOutAttendanceController,
 } from "../controllers/attendance.controller.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
+import req_sender_auth from "../middlewares/req_sender_auth.js";
 const router = Router();
 
 // Get Employees Full Information ::
-router.get("/get-employees-full-information", user_validation_middleware, getEmployeesFullInformationController);
+router.get("/get-employees-full-information", user_validation_middleware, req_sender_auth, employee_feature_checker("employees-features-management", "get-employee-accessible-features"), getEmployeesFullInformationController);
 
 router.get(
   "/my-assigned-leave-balances",
