@@ -804,6 +804,8 @@ export const get_all_employees_with_accessible_features_and_sub_features_info_co
           sf.sub_feature_path AS sub_feature_value,
           esfa.feature_access
         FROM apt_org_members om
+        INNER JOIN apt_organizations org
+          ON org.id = om.org_id
         INNER JOIN apt_users u
           ON u.id = om.user_id
         LEFT JOIN org_employee_feature_access efa
@@ -828,6 +830,7 @@ export const get_all_employees_with_accessible_features_and_sub_features_info_co
           AND osfa.parent_feature_id = f.id
         WHERE om.org_id = ?
           AND om.is_active = 1
+          AND u.id <> org.owner_id
           AND (f.id IS NULL OR ofa.feature_id IS NOT NULL)
           AND (sf.id IS NULL OR osfa.sub_feature_id IS NOT NULL)
         ORDER BY u.id ASC, f.id ASC, sf.id ASC

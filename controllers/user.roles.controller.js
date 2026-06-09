@@ -139,9 +139,7 @@ export const get_all_user_roles_controller = async (req, res) => {
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
-    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
+    
     const [roles] = await db.promise().query(
       `SELECT * FROM apt_roles
        WHERE org_id = ?
