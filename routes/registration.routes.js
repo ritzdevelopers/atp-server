@@ -4,13 +4,18 @@ import { user_register_controller } from "../controllers/registeration.controlle
 import user_validation_middleware from "../middlewares/user_validation_middleware.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
 import user_membership_checker from "../middlewares/user_membership_checker.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 
 const router = Router();
 
 
 router.post("/user", user_register_controller);
 router.post("/organization", create_organization_controller);
-router.post("/add-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker, create_organization_address_controller);
-router.get("/get-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker, get_organization_address_controller);
-router.put("/update-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker, update_organization_address_controller);
+router.post("/add-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker, employee_feature_checker("manage-organization-information", "manage-organization-information", "add"), create_organization_address_controller);
+router.get("/get-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker,
+    employee_feature_checker("manage-organization-information", "manage-organization-information", "read"),
+    get_organization_address_controller);
+router.put("/update-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker,
+    employee_feature_checker("manage-organization-information", "manage-organization-information", "update"),
+    update_organization_address_controller);
 export default router;

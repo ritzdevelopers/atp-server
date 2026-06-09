@@ -20,10 +20,11 @@ import {
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
+import user_membership_checker from "../middlewares/user_membership_checker.js";
 const router = Router();
 
 // Get Employees Full Information ::
-router.get("/get-employees-full-information", user_validation_middleware, req_sender_auth, employee_feature_checker("employees-features-management", "get-employee-accessible-features"), getEmployeesFullInformationController);
+router.get("/get-employees-full-information", user_validation_middleware, req_sender_auth, user_membership_checker,  getEmployeesFullInformationController);
 
 router.get(
   "/my-assigned-leave-balances",
@@ -32,58 +33,45 @@ router.get(
 );
 
 // Update Image and Name Of Employee ::
-router.patch("/update-image-and-name-of-employee", user_validation_middleware, user_feature_access_checker("employee-management"), updateImageAndNameOfEmployeeController);
+router.patch("/update-image-and-name-of-employee", user_validation_middleware, req_sender_auth, user_membership_checker, employee_feature_checker("employee-management", "manage-employee", "update"), updateImageAndNameOfEmployeeController);
 
 // Mark Attendance *Check In Of Employee ::
-router.post("/mark-attendance-check-in", user_validation_middleware, markAttendanceController);
+router.post("/mark-attendance-check-in", user_validation_middleware, req_sender_auth, user_membership_checker, markAttendanceController);
 
 // Mark Attendance *Check Out Of Employee ::
-router.post("/mark-attendance-check-out", user_validation_middleware, markCheckOutAttendanceController);
+router.post("/mark-attendance-check-out", user_validation_middleware, req_sender_auth, user_membership_checker, markCheckOutAttendanceController);
 
 // ENTRY/EXIT log (e.g. stepped out briefly) for today's attendance row
-router.post("/add-attendance-log", user_validation_middleware, addAttendanceLogController);
+router.post("/add-attendance-log", user_validation_middleware, req_sender_auth, user_membership_checker, addAttendanceLogController);
 
 // Get Attendance History Of Employee ::
 
 // Apply For Leave ::
-router.post("/apply-for-leave", user_validation_middleware, leaveQueryController);
+router.post("/apply-for-leave", user_validation_middleware, req_sender_auth, user_membership_checker, leaveQueryController);
 
 // My leave request history (current user, per org) ::
 router.post(
-  "/my-leave-queries",
-  user_validation_middleware,
-  getMyLeaveQueriesController,
+  "/my-leave-queries", user_validation_middleware, req_sender_auth, user_membership_checker,  getMyLeaveQueriesController,
 );
 router.get(
-  "/my-leave-queries",
-  user_validation_middleware,
-  getMyLeaveQueriesController,
+  "/my-leave-queries", user_validation_middleware, req_sender_auth, user_membership_checker,  getMyLeaveQueriesController,
 );
 
 // Attendance-related queries (punch corrections, etc.) — saved to attendance_related_queries
 router.post(
-  "/raise-attendance-query",
-  user_validation_middleware,
-  raiseAttendanceQueryController,
+  "/raise-attendance-query", user_validation_middleware, req_sender_auth, user_membership_checker,  raiseAttendanceQueryController,
 );
 
 router.patch(
-  "/correct-attendance-query",
-  user_validation_middleware,
-  updateAttendanceQueryCorrectionController,
+  "/correct-attendance-query", user_validation_middleware, req_sender_auth, user_membership_checker,  updateAttendanceQueryCorrectionController,
 );
 
 router.get(
-  "/my-attendance-queries",
-  user_validation_middleware,
-  getMyAttendanceQueriesController,
+  "/my-attendance-queries", user_validation_middleware, req_sender_auth, user_membership_checker,  getMyAttendanceQueriesController,
 );
 router.post(
-  "/my-attendance-queries",
-  user_validation_middleware,
-  getMyAttendanceQueriesController,
+  "/my-attendance-queries", user_validation_middleware, req_sender_auth, user_membership_checker,  getMyAttendanceQueriesController,
 );
 
-// 
 
 export default router;

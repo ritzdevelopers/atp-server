@@ -7,6 +7,7 @@ import {
   get_all_assigned_dashboards_to_employee,
   update_dashboard_from_employee,
 } from "../controllers/dashboard/dashboard.controller.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
+  employee_feature_checker("employee-management", "manage-assigned-dashboards", "read"),
   get_all_assigned_dashboards_to_employee,
 );
 
@@ -23,6 +25,7 @@ router.post(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
+  employee_feature_checker("employee-management", "assign-dashboard-to-employee", "create"),
   assign_dashboard_to_employee,
 );
 
@@ -31,6 +34,7 @@ router.patch(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
+  employee_feature_checker("employee-management", "manage-assigned-dashboards", "update"),
   update_dashboard_from_employee,
 );
 

@@ -14,34 +14,35 @@ import {
 } from "../controllers/org_team.controller.js";
 import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import user_membership_checker from "../middlewares/user_membership_checker.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 const router = express.Router();
 
 router.post(
   "/create-team",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "team-management", "create"),
   create_org_team_controller,
 );
 router.post(
   "/add-member-to-team",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "team-management", "create"),
   add_member_to_org_team_controller,
 );
 router.post(
   "/remove-member-from-team",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "team-management", "create"),
   remove_member_from_org_team_controller,
 );
 router.patch(
   "/update-team",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "team-management", "update"),
   update_org_team_controller,
 );
 router.get(
@@ -53,25 +54,27 @@ router.get(
 router.get(
   "/get-team/:team_id",
   user_validation_middleware,
-  req_sender_auth, user_membership_checker, 
+  req_sender_auth, user_membership_checker,
+  employee_feature_checker("employee-management", "team-management", "read"),
   get_single_org_team_controller,
 );
 router.get(
   "/team-activity/:team_id",
   user_validation_middleware,
-  req_sender_auth, user_membership_checker, 
+  req_sender_auth, user_membership_checker,
   get_team_activity_feed_controller,
 );
 router.get(
   "/exit-process-report/:employee_id",
   user_validation_middleware,
-  req_sender_auth, user_membership_checker, 
+  req_sender_auth, user_membership_checker,
   get_team_member_exit_process_reports_controller,
 );
 router.get(
   "/get-all-teams",
   user_validation_middleware,
-  req_sender_auth, user_membership_checker, 
+  req_sender_auth, user_membership_checker,
+  employee_feature_checker("employee-management", "team-management", "read"),
   get_all_org_team_members_controller,
 );
 

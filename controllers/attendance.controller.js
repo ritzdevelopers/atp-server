@@ -947,43 +947,13 @@ export const createCompanyWorkShiftsController = async (req, res) => {
 export const getAllShiftsController = async (req, res) => {
   try {
     const user = req.user;
-    const org_id = req.query?.org_id ?? req.body?.org_id;
+    const {org_id} = req;
 
     if (!user) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    if (user.user_role_name !== "admin" && user.user_role_name !== "hr") {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    if (!org_id) {
-      return res.status(400).json({ message: "org_id is required" });
-    }
-
-    // 1. Check Org Exists
-    const [org] = await db
-      .promise()
-      .query("SELECT id FROM apt_organizations WHERE id = ?", [org_id]);
-
-    if (org.length === 0) {
-      return res.status(404).json({ message: "Organization not found" });
-    }
-
-    // 2. Check Is User Valid Member of Org
-    const [member] = await db
-      .promise()
-      .query(
-        "SELECT user_id FROM apt_org_members WHERE user_id = ? AND org_id = ?",
-        [user.user_id, org_id],
-      );
-
-    if (member.length === 0) {
-      return res
-        .status(403)
-        .json({ message: "User not part of this organization" });
-    }
-
+   
     // 3. Get All Shifts
     const [shifts] = await db.promise().query(
       `SELECT 

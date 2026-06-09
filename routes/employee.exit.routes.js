@@ -23,6 +23,7 @@ import {
   assign_handover_manager,
   update_assigned_handover_manager,
 } from "../controllers/handover_management.controller.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 
 const router = express.Router();
 
@@ -30,7 +31,7 @@ router.post(
   "/create-employee-exit-process",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "create"),
   create_employee_exit_process,
 );
 
@@ -38,7 +39,7 @@ router.get(
   "/get-all-employee-exit-processes",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "read"),
   get_all_employee_exit_processes,
 );
 
@@ -46,7 +47,7 @@ router.get(
   "/get-employee-exit-process/:id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "read"),
   get_employee_exit_process,
 );
 
@@ -61,7 +62,7 @@ router.get(
   "/assets-for-handover/:user_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "read"),
   get_all_assets_for_handover_of_an_employee,
 );
 
@@ -69,7 +70,7 @@ router.patch(
   "/correction-in-employee-exit-process/:id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   correction_in_employee_exit_process,
 );
 
@@ -77,7 +78,7 @@ router.post(
   "/exit-in-process/:exit_process_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   exit_in_process,
 );
 
@@ -85,7 +86,7 @@ router.post(
   "/exit-completed/:exit_process_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   exit_completed,
 );
 
@@ -93,7 +94,7 @@ router.post(
   "/exit-cancelled/:exit_process_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   exit_cancelled,
 );
 
@@ -101,7 +102,6 @@ router.post(
   "/create-employee-exit-process-handover-query",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
   create_employee_exit_process_handover_query,
 );
 
@@ -109,8 +109,7 @@ router.patch(
   "/employee-exit-process/:employee_exit_process_id/handover-query/:employee_id/:id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
-    update_employee_exit_process_handover_query,
+  update_employee_exit_process_handover_query,
 );
 
 router.patch(
@@ -125,7 +124,6 @@ router.patch(
   "/asset-handover-status/:asset_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
   update_asset_handover_status,
 );
 
@@ -133,7 +131,7 @@ router.post(
   "/assign-handover-manager/:exit_process_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   assign_handover_manager,
 );
 
@@ -141,7 +139,7 @@ router.patch(
   "/update-assigned-handover-manager/:exit_process_id",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
+  employee_feature_checker("employee-management", "employee-offboarding", "update"),
   update_assigned_handover_manager,
 );
 
@@ -149,7 +147,6 @@ router.post(
   "/return-assets-completed",
   user_validation_middleware,
   req_sender_auth, user_membership_checker,
-  user_feature_access_checker("employee-management"),
   return_assets_completed_controller,
 );
 

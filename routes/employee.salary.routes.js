@@ -8,30 +8,31 @@ import {
   get_employee_salary_controller,
   update_employee_salary_controller,
 } from "../controllers/employee.salary.controller.js";
+import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 
 const router = Router();
 
 router.post(
   "/register-employee-salary",
   user_validation_middleware,
-  user_feature_access_checker("payroll-management"),
-  req_sender_auth, user_membership_checker,
+   req_sender_auth, user_membership_checker,
+  employee_feature_checker("payroll-management", "manage-salary", "create"),
   register_employee_salary_controller,
 );
 
 router.get(
   "/get-employee-salary",
   user_validation_middleware,
-  user_feature_access_checker("payroll-management"),
-  req_sender_auth, user_membership_checker,
+   req_sender_auth, user_membership_checker,
+  employee_feature_checker("payroll-management", "manage-salary", "read"),
   get_employee_salary_controller,
 );
 
 router.put(
   "/update-employee-salary",
   user_validation_middleware,
-  user_feature_access_checker("payroll-management"),
-  req_sender_auth, user_membership_checker,
+   req_sender_auth, user_membership_checker,
+  employee_feature_checker("payroll-management", "manage-salary", "update"),
   update_employee_salary_controller,
 );
 
