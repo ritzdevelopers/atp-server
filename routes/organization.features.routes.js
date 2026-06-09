@@ -21,7 +21,6 @@ import {
   assign_features_to_employee_controller,
 } from "../controllers/organizations_features/features_managers.controller.js";
 
-import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
 import user_membership_checker from "../middlewares/user_membership_checker.js";
 import employee_feature_checker from "../middlewares/employee_feature_checker.js";
@@ -150,7 +149,7 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
- employee_feature_checker("employees-features-management", "get-employee-accessible-features", "read"),
+  employee_feature_checker("employees-features-management", "get-employee-accessible-features", "read"),
   get_all_employees_with_accessible_features_and_sub_features_info_controller,
 );
 
@@ -159,7 +158,7 @@ router.post(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
- employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
+  employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
   assign__feature_access_to_the_employee,
 );
 
@@ -168,7 +167,7 @@ router.post(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
- employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
+  employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
   assign_features_to_employee_controller,
 );
 

@@ -1890,9 +1890,48 @@ GROUP BY oi.id`,
   }
 };
 
+async function findOverlappingHolidays(
+  connection,
+  orgId,
+  startDate,
+  endDate,
+  excludeHolidayId = null,
+) {
+  const params = [orgId, endDate, startDate];
+  let excludeClause = "";
+  if (excludeHolidayId != null) {
+    excludeClause = "AND id <> ?";
+    params.push(excludeHolidayId);
+  }
+
+  const [rows] = await connection.query(
+    `
+    SELECT
+      id,
+      holiday_name,
+      holiday_date,
+      COALESCE(end_date, holiday_date) AS effective_end_date
+    FROM holidays
+    WHERE org_id = ?
+      AND holiday_date <= ?
+      AND COALESCE(end_date, holiday_date) >= ?
+      ${excludeClause}
+    ORDER BY holiday_date ASC
+  `,
+    params,
+  );
+
+  return rows;
+}
+
+async function findHolidayOnDate(connection, orgId, date) {
+  const rows = await findOverlappingHolidays(connection, orgId, date, date);
+  return rows.length > 0 ? rows[0] : null;
+}
+
 // Add Holiday Controller
 export const addHolidayController = async (req, res) => {
-  const { holiday_name, holiday_date } = req.body;
+  const { holiday_name, holiday_date, end_date } = req.body;
   const { org_id } = req;
   const { user_id } = req.user;
   let connection;
@@ -1901,7 +1940,10 @@ export const addHolidayController = async (req, res) => {
     return res.status(400).json({ message: "All fields are required" });
   }
 
- 
+  const holiday_end_date = end_date ? end_date : holiday_date;
+  if (holiday_end_date < holiday_date) {
+    return res.status(400).json({ message: "Holiday end date cannot be before start date" });
+  }
 
   try {
     connection = await db.promise().getConnection();
@@ -1931,23 +1973,28 @@ export const addHolidayController = async (req, res) => {
       return res.status(404).json({ message: "Organization not found" });
     }
 
-    // 2. Check Duplicate Holiday
-    const [existing] = await connection.query(
-      "SELECT id FROM holidays WHERE org_id = ? AND holiday_date = ?",
-      [org_id, holiday_date],
+    // 2. Reject overlapping / duplicate date ranges for this org
+    const overlapping = await findOverlappingHolidays(
+      connection,
+      org_id,
+      holiday_date,
+      holiday_end_date,
     );
 
-    if (existing.length > 0) {
+    if (overlapping.length > 0) {
       await connection.rollback();
-      return res.status(400).json({ message: "Holiday already exists" });
+      const conflict = overlapping[0];
+      return res.status(400).json({
+        message: `Holiday '${conflict.holiday_name}' (${conflict.holiday_date} to ${conflict.effective_end_date}) overlaps the selected date range`,
+      });
     }
 
     // 3. Insert Holiday
     await connection.query(
       `INSERT INTO holidays 
-      (org_id, holiday_name, holiday_date, holiday_created_by_id, holiday_created_by_name)
-      VALUES (?, ?, ?, ?, ?)`,
-      [org_id, holiday_name, holiday_date, user_id, holiday_created_by_name],
+      (org_id, holiday_name, holiday_date, end_date, holiday_created_by_id, holiday_created_by_name)
+      VALUES (?, ?, ?, ?, ?, ?)`,
+      [org_id, holiday_name, holiday_date, holiday_end_date, user_id, holiday_created_by_name],
     );
 
     // 4. Activity Log
@@ -1958,7 +2005,7 @@ export const addHolidayController = async (req, res) => {
       [
         org_id,
         "ADD_HOLIDAY",
-        `Holiday '${holiday_name}' added for date ${holiday_date}`,
+        `Holiday '${holiday_name}' added for date ${holiday_date} to ${holiday_end_date}`,
         user_id,
         holiday_created_by_name,
       ],
@@ -1980,15 +2027,17 @@ export const addHolidayController = async (req, res) => {
 
 // Update Holiday Controller
 export const updateHolidayController = async (req, res) => {  
-  const { holiday_id, holiday_name, holiday_date } = req.body; 
+  const { holiday_id, holiday_name, holiday_date, end_date } = req.body; 
   const { user_id } = req.user;
   let connection;
 
   if (!holiday_id || !holiday_name || !holiday_date) {
     return res.status(400).json({ message: "All fields are required" });
   }
-
- 
+   const holiday_end_date = end_date ? end_date : holiday_date;
+   if (holiday_end_date < holiday_date) {
+    return res.status(400).json({ message: "Holiday end date cannot be before start date" });
+  }
 
   try {
     connection = await db.promise().getConnection();
@@ -2021,13 +2070,30 @@ export const updateHolidayController = async (req, res) => {
 
     const org_id = holiday[0].org_id;
 
-    // 2. Update Holiday
-    await connection.query(
-      "UPDATE holidays SET holiday_name = ?, holiday_date = ? WHERE id = ?",
-      [holiday_name, holiday_date, holiday_id],
+    // 2. Reject overlapping / duplicate date ranges (exclude current holiday)
+    const overlapping = await findOverlappingHolidays(
+      connection,
+      org_id,
+      holiday_date,
+      holiday_end_date,
+      holiday_id,
     );
 
-    // 3. Activity Log
+    if (overlapping.length > 0) {
+      await connection.rollback();
+      const conflict = overlapping[0];
+      return res.status(400).json({
+        message: `Holiday '${conflict.holiday_name}' (${conflict.holiday_date} to ${conflict.effective_end_date}) overlaps the selected date range`,
+      });
+    }
+
+    // 3. Update Holiday
+    await connection.query(
+      "UPDATE holidays SET holiday_name = ?, holiday_date = ?, end_date = ? WHERE id = ?",
+      [holiday_name, holiday_date, holiday_end_date, holiday_id],
+    );
+
+    // 4. Activity Log
     await connection.query(
       `INSERT INTO management_activity_log 
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
@@ -2035,7 +2101,7 @@ export const updateHolidayController = async (req, res) => {
       [
         org_id,
         "UPDATE_HOLIDAY",
-        `Holiday updated to '${holiday_name}' on ${holiday_date}`,
+        `Holiday updated to '${holiday_name}' on ${holiday_date} to ${holiday_end_date}`,
         user_id,
         holiday_updated_by_name,
       ],
@@ -2366,6 +2432,21 @@ export const leaveQueryController = async (req, res) => {
       return res.status(404).json({ message: "User not found" });
     }
     const user_name = user[0].user_name;
+
+    const leaveEndNorm = endNorm ?? startNorm;
+    const startHoliday = await findHolidayOnDate(connection, org_id, startNorm);
+    const endHoliday =
+      leaveEndNorm !== startNorm
+        ? await findHolidayOnDate(connection, org_id, leaveEndNorm)
+        : null;
+
+    if (startHoliday || endHoliday) {
+      await connection.rollback();
+      return res.status(400).json({
+        message:
+          "There is a holiday on your start or end date. Please update your leave query.",
+      });
+    }
 
     let leaveTypeValue = legacyLeaveType;
     let resolvedLeaveTypeId = null;

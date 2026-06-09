@@ -828,3 +828,5 @@ CREATE TABLE dashboard_management (
     FOREIGN KEY (org_id)
         REFERENCES apt_organizations(id)
 );
+
+ALTER TABLE holidays ADD COLUMN end_date date;
