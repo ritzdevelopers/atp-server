@@ -4,7 +4,7 @@ const req_sender_auth = async (req, res, next) => {
   try {
     const { user_id } = req.user;
 
-    if (!user_id) {
+    if (!user_id) { 
       return res.status(401).json({ message: "Unauthorized" });
     }
 

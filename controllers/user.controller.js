@@ -97,12 +97,7 @@ export const user_register_controller = async (req, res) => {
         if (organization_id) {
           // User Checking
           const user = req.user;
-          if (
-            !user ||
-            (user.user_role_name !== "admin" && user.user_role_name !== "hr")
-          ) {
-            return res.status(401).json({ message: "Unauthorized" });
-          }
+         
           const performed_by = user.user_id;
 
           const fetch_org_id = "SELECT id FROM apt_organizations WHERE id = ?";

@@ -72,6 +72,8 @@ export const get_all_assigned_dashboards_to_employee = async (req, res) => {
         dm.created_at AS dashboard_assigned_at,
         dm.updated_at AS dashboard_updated_at
       FROM apt_org_members om
+      INNER JOIN apt_organizations org
+        ON org.id = om.org_id
       INNER JOIN apt_users u
         ON u.id = om.user_id
       LEFT JOIN dashboard_management dm
@@ -79,6 +81,7 @@ export const get_all_assigned_dashboards_to_employee = async (req, res) => {
         AND dm.org_id = om.org_id
       WHERE om.org_id = ?
         AND om.is_active = 1
+        AND u.id <> org.owner_id
       ORDER BY u.user_name ASC, u.id ASC
       `,
       [org_id],
