@@ -443,6 +443,7 @@ export const get_org_info_controller = async (req, res) => {
 export const get_organization_address_controller = async (req, res) => {
   try {
     const { user_id } = req.user;
+ 
     const { org_id } = req;
 
     // Get Owner ID
@@ -456,13 +457,7 @@ export const get_organization_address_controller = async (req, res) => {
         success: false,
       });
     }
-    if (ownerRows[0].owner_id !== user_id) {
-      return res.status(403).json({
-        error: "Unauthorized",
-        message: "Unauthorized",
-        success: false,
-      });
-    }
+ 
     const [organization_addresses] = await db
       .promise()
       .query(

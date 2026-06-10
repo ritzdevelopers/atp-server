@@ -40,7 +40,6 @@ const employee_feature_checker = (
 
       const { user_id: action_user } = req.user;
       const { org_id } = req;
-
       // Employee Exists
       if (!(await isEmployeeExists(connection, action_user, org_id))) {
         return errorHandling(

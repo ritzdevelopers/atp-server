@@ -12,6 +12,9 @@ import {
   delete_user_external_information_controller,
   get_single_employee_controller,
   update_my_profile_image_controller,
+  create_user_background_verification_controller,
+  update_user_reference_controller,
+  update_employee_background_verification_status_controller,
 } from "../controllers/user.controller.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js"; 
 import {
@@ -251,6 +254,36 @@ router.delete(
   user_membership_checker,
   employee_feature_checker("employee-management", "manage-employee", "delete"),
   delete_user_external_information_controller,
+);
+
+
+// Employee Background Verfication Routes ::
+
+router.post(
+  "/create-user-background-verification",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employee-management", "manage-employee", "create"),
+  create_user_background_verification_controller,
+);
+
+router.patch(
+  "/update-user-background-verification",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employee-management", "manage-employee", "update"),
+  update_user_reference_controller,
+);
+
+router.patch(
+  "/update-employee-background-verification-status",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employee-management", "manage-employee", "update"),
+  update_employee_background_verification_status_controller,
 );
 
 export default router;

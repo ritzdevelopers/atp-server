@@ -5,6 +5,7 @@ import dotenv from "dotenv";
 import uploadToCloudinary, {
   destroyFromCloudinary,
 } from "../config/cloudinary.js";
+import { isEmployeeExists } from "../helper/employee_checker.js";
 
 dotenv.config();
 
@@ -97,7 +98,7 @@ export const user_register_controller = async (req, res) => {
         if (organization_id) {
           // User Checking
           const user = req.user;
-         
+
           const performed_by = user.user_id;
 
           const fetch_org_id = "SELECT id FROM apt_organizations WHERE id = ?";
@@ -446,7 +447,7 @@ export const get_all_users_controller = async (req, res) => {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    const {user_id: action_user_id} = user;
+    const { user_id: action_user_id } = user;
     if (!action_user_id) {
       return res.status(401).json({ message: "Unauthorized" });
     }
@@ -462,7 +463,7 @@ export const get_all_users_controller = async (req, res) => {
     }
     const organization_id = organization_result[0].org_id;
 
-    // Fetch Organization Owner ID 
+    // Fetch Organization Owner ID
     const fetch_organization_owner_id_query =
       "SELECT owner_id FROM apt_organizations WHERE id = ?";
     const [organization_owner_id_result] = await db
@@ -560,7 +561,9 @@ WHERE apt_org_members.org_id = ?
 AND apt_users.id != ?
 `;
 
-    const [result] = await db.promise().query(query, [organization_id, organization_owner_id]);
+    const [result] = await db
+      .promise()
+      .query(query, [organization_id, organization_owner_id]);
 
     return res.status(200).json({
       message: "Users fetched successfully",
@@ -771,7 +774,7 @@ export const update_user_role_controller = async (req, res) => {
     res.status(500).json({ message: "Error updating user role" });
   }
 };
-// 
+//
 export const update_user_name_email_phone_password_controller1 = async (
   req,
   res,
@@ -1597,399 +1600,776 @@ AND r.role_name NOT IN ('admin', 'hr')`;
   }
 };
 
+const ADDRESS_TYPE_VALUES = ["current", "permanent"];
+
+const USER_ADDRESS_ACTIVITY_SQL =
+  "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+
+function isBlankAddressValue(v) {
+  return v === undefined || v === null || String(v).trim() === "";
+}
+
+function normalizeAddressType(value, fieldLabel) {
+  if (isBlankAddressValue(value)) {
+    return { error: `${fieldLabel} is required` };
+  }
+  const normalized = String(value).trim().toLowerCase();
+  if (!ADDRESS_TYPE_VALUES.includes(normalized)) {
+    return {
+      error: `${fieldLabel} must be one of: ${ADDRESS_TYPE_VALUES.join(", ")}`,
+    };
+  }
+  return { data: normalized };
+}
+
+function validateSingleAddressEntry(raw, indexLabel) {
+  const prefix = indexLabel ? `${indexLabel}: ` : "";
+
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return { error: `${prefix}address entry must be a valid object` };
+  }
+
+  const typeResult = normalizeAddressType(
+    raw.address_type,
+    `${prefix}address_type`,
+  );
+  if (typeResult.error) return typeResult;
+
+  const requiredFields = [
+    ["country", 100],
+    ["state", 100],
+    ["district", 100],
+    ["city", 100],
+    ["street", 255],
+    ["house_number", 100],
+    ["zip_code", 20],
+  ];
+
+  for (const [field, maxLen] of requiredFields) {
+    if (isBlankAddressValue(raw[field])) {
+      return { error: `${prefix}${field} is required` };
+    }
+    if (String(raw[field]).trim().length > maxLen) {
+      return {
+        error: `${prefix}${field} must be at most ${maxLen} characters`,
+      };
+    }
+  }
+
+  const is_from_village =
+    raw.is_from_village === true ||
+    raw.is_from_village === 1 ||
+    String(raw.is_from_village).toLowerCase() === "true";
+
+  let village_name = null;
+  if (is_from_village) {
+    if (isBlankAddressValue(raw.village_name)) {
+      return {
+        error: `${prefix}village_name is required when is_from_village is true`,
+      };
+    }
+    village_name = String(raw.village_name).trim();
+    if (village_name.length > 255) {
+      return {
+        error: `${prefix}village_name must be at most 255 characters`,
+      };
+    }
+  } else if (
+    raw.village_name !== undefined &&
+    raw.village_name !== null &&
+    String(raw.village_name).trim() !== ""
+  ) {
+    village_name = String(raw.village_name).trim();
+    if (village_name.length > 255) {
+      return {
+        error: `${prefix}village_name must be at most 255 characters`,
+      };
+    }
+  }
+
+  return {
+    data: {
+      address_type: typeResult.data,
+      country: String(raw.country).trim(),
+      state: String(raw.state).trim(),
+      district: String(raw.district).trim(),
+      city: String(raw.city).trim(),
+      is_from_village,
+      village_name,
+      street: String(raw.street).trim(),
+      house_number: String(raw.house_number).trim(),
+      zip_code: String(raw.zip_code).trim(),
+    },
+  };
+}
+
+/**
+ * Ensures exactly two addresses with different types:
+ * one permanent and one current (field values may be identical).
+ */
+function validateAddressTypePair(types, contextLabel = "") {
+  const prefix = contextLabel ? `${contextLabel}: ` : "";
+
+  if (!Array.isArray(types) || types.length !== 2) {
+    return {
+      error: `${prefix}Exactly 2 addresses are required (one permanent and one current)`,
+    };
+  }
+
+  const permanentCount = types.filter((type) => type === "permanent").length;
+  const currentCount = types.filter((type) => type === "current").length;
+
+  if (permanentCount === 2) {
+    return {
+      error: `${prefix}An employee cannot have two permanent addresses. Provide one permanent and one current address.`,
+    };
+  }
+
+  if (currentCount === 2) {
+    return {
+      error: `${prefix}An employee cannot have two current addresses. Provide one permanent and one current address.`,
+      warning:
+        "Duplicate current address is not allowed. Assign one permanent and one current address only.",
+    };
+  }
+
+  if (permanentCount !== 1 || currentCount !== 1) {
+    return {
+      error: `${prefix}Address types must be one permanent and one current.`,
+    };
+  }
+
+  return { data: { permanentCount, currentCount } };
+}
+
+/**
+ * Validates add-address payload.
+ * Rules:
+ * - Exactly 2 addresses
+ * - One must be `permanent`, one must be `current`
+ * - Address field values may be the same; types cannot be the same
+ */
+function validateAddressInfoPayload(raw) {
+  if (!Array.isArray(raw)) {
+    return { error: "address_info must be an array of exactly 2 addresses" };
+  }
+  if (raw.length !== 2) {
+    return { error: "address_info must contain exactly 2 addresses" };
+  }
+
+  const firstResult = validateSingleAddressEntry(raw[0], "Address 1");
+  if (firstResult.error) return firstResult;
+
+  const secondResult = validateSingleAddressEntry(raw[1], "Address 2");
+  if (secondResult.error) return secondResult;
+
+  const typeCheck = validateAddressTypePair(
+    [firstResult.data.address_type, secondResult.data.address_type],
+    "address_info",
+  );
+  if (typeCheck.error) return typeCheck;
+
+  return {
+    data: [firstResult.data, secondResult.data],
+  };
+}
+
 export const add_user_address_controller = async (req, res) => {
   let connection;
   try {
-    const {
-      address_id,
-      user_id,
-      org_id,
-      country,
-      state,
-      district,
-      city,
-      is_from_village,
-      village_name,
-      street,
-      house_number,
-      zip_code,
-    } = req.body;
     const { user_id: action_user_id } = req.user || {};
-    const isMissing = (value) =>
-      value === undefined || value === null || String(value).trim() === "";
-    const normalizedIsFromVillage =
-      is_from_village === true ||
-      is_from_village === 1 ||
-      String(is_from_village).toLowerCase() === "true" ||
-      String(is_from_village) === "1"
-        ? 1
-        : 0;
+    const org_id = req.org_id;
+    const { address_info, employee_id } = req.body;
 
-    // All Fields Are Required
-    if (
-      isMissing(user_id) ||
-      isMissing(org_id) ||
-      isMissing(country) ||
-      isMissing(state) ||
-      isMissing(district) ||
-      isMissing(city) ||
-      isMissing(is_from_village) ||
-      (normalizedIsFromVillage === 1 && isMissing(village_name)) ||
-      isMissing(street) ||
-      isMissing(house_number) ||
-      isMissing(zip_code)
-    ) {
-      return res.status(400).json({ message: "All fields are required" });
+    if (!action_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
     }
 
-    // Check If Action User Is Valid
-    const action_user_check = "SELECT user_name from apt_users where id = ?";
-    // Check If Action User Is Valid Member Of The Organization
-    const action_user_member_check =
-      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
-    // Check Organization Is Valid
-    const organization_check = "SELECT * from apt_organizations where id = ?";
-    // Check If User Is Valid
-    const user_check = "SELECT user_name from apt_users where id = ?";
-    // Check If User Is Valid Member Of The Organization
-    const user_member_check =
-      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
-    // Save Address In User Address Table -> user_address
-    const save_address_query =
-      "INSERT INTO user_address (user_id, org_id, country, state, district, city, is_from_village, village_name, street, house_number, zip_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
-    // Save Activity In User Activity Logs Table -> apt_user_activity_logs
-    const save_activity_query =
-      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    if (isBlankAddressValue(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
 
-    // Start Transaction ::
+    if (isBlankAddressValue(employee_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    const payloadResult = validateAddressInfoPayload(address_info);
+    if (payloadResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: payloadResult.error,
+      });
+    }
+
+    const addressRows = payloadResult.data;
+
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
 
-    const [actionUserResult] = await connection.query(action_user_check, [
-      action_user_id,
-    ]);
-    if (actionUserResult.length === 0) {
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
       await connection.rollback();
-      return res.status(404).json({ message: "Action user not found" });
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
     }
-    const action_user_name = actionUserResult[0].user_name;
 
-    const [actionMemberResult] = await connection.query(
-      action_user_member_check,
-      [action_user_id, org_id],
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found in this organization",
+      });
+    }
+
+    const [orgResult] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ? LIMIT 1",
+      [org_id],
     );
-    if (actionMemberResult.length === 0) {
+    if (!orgResult.length) {
       await connection.rollback();
-      return res
-        .status(403)
-        .json({ message: "Action user is not a member of this organization" });
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
     }
 
-    const [organizationResult] = await connection.query(organization_check, [
-      org_id,
-    ]);
-    if (organizationResult.length === 0) {
+    const [existingAddresses] = await connection.query(
+      `SELECT id, address_type
+       FROM user_address
+       WHERE user_id = ? AND org_id = ?
+       ORDER BY id ASC`,
+      [employee_id, org_id],
+    );
+
+    if (existingAddresses.length > 0) {
       await connection.rollback();
-      return res.status(404).json({ message: "Organization not found" });
+      return res.status(409).json({
+        success: false,
+        message:
+          "Employee addresses already exist for this organization. Use update instead.",
+      });
     }
 
-    const [userResult] = await connection.query(user_check, [user_id]);
-    if (userResult.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: "User not found" });
+    const insertSql = `INSERT INTO user_address (
+        user_id,
+        org_id,
+        address_type,
+        country,
+        state,
+        district,
+        city,
+        is_from_village,
+        village_name,
+        street,
+        house_number,
+        zip_code
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+
+    const savedAddresses = [];
+
+    for (const row of addressRows) {
+      const [insertResult] = await connection.query(insertSql, [
+        employee_id,
+        org_id,
+        row.address_type,
+        row.country,
+        row.state,
+        row.district,
+        row.city,
+        row.is_from_village ? 1 : 0,
+        row.village_name,
+        row.street,
+        row.house_number,
+        row.zip_code,
+      ]);
+
+      if (!insertResult?.affectedRows) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "Failed to save employee address",
+        });
+      }
+
+      const [createdRows] = await connection.query(
+        `SELECT
+          id,
+          user_id,
+          org_id,
+          address_type,
+          country,
+          state,
+          district,
+          city,
+          is_from_village,
+          village_name,
+          street,
+          house_number,
+          zip_code
+        FROM user_address
+        WHERE id = ?
+        LIMIT 1`,
+        [insertResult.insertId],
+      );
+
+      savedAddresses.push(createdRows[0]);
     }
-    const affected_user_name = userResult[0].user_name;
 
-    const [userMemberResult] = await connection.query(user_member_check, [
-      user_id,
-      org_id,
-    ]);
-    if (userMemberResult.length === 0) {
-      await connection.rollback();
-      return res
-        .status(404)
-        .json({ message: "User is not a member of this organization" });
-    }
-
-    const normalizedVillageName =
-      normalizedIsFromVillage === 1 ? String(village_name).trim() : null;
-
-    const addressPayload = {
-      user_id,
-      org_id,
-      country,
-      state,
-      district,
-      city,
-      is_from_village: normalizedIsFromVillage,
-      village_name: normalizedVillageName,
-      street,
-      house_number,
-      zip_code,
+    const activityPayload = {
+      employee_id: Number(employee_id),
+      org_id: Number(org_id),
+      addresses: savedAddresses,
     };
 
-    const [addressResult] = await connection.query(save_address_query, [
-      user_id,
-      org_id,
-      country,
-      state,
-      district,
-      city,
-      normalizedIsFromVillage,
-      normalizedVillageName,
-      street,
-      house_number,
-      zip_code,
-    ]);
+    const [saveActivityResult] = await connection.query(
+      USER_ADDRESS_ACTIVITY_SQL,
+      [
+        action_user_id,
+        employee_id,
+        org_id,
+        "ADD_USER_ADDRESS",
+        null,
+        JSON.stringify(activityPayload),
+        "Employee permanent and current addresses added",
+      ],
+    );
 
-    await connection.query(save_activity_query, [
-      action_user_id,
-      user_id,
-      org_id,
-      "ADD_USER_ADDRESS",
-      null,
-      JSON.stringify(addressPayload),
-      `Address added for ${affected_user_name} by ${action_user_name}`,
-    ]);
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
 
     await connection.commit();
 
     return res.status(201).json({
-      message: "User address added successfully",
+      success: true,
+      message: "Employee addresses saved successfully",
       data: {
-        id: addressResult.insertId,
-        ...addressPayload,
+        employee_id: Number(employee_id),
+        org_id: Number(org_id),
+        addresses: savedAddresses,
       },
     });
   } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("Error adding user address: ", error);
-    return res.status(500).json({ message: "Error adding user address" });
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("add_user_address_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   } finally {
     if (connection) connection.release();
   }
 };
 
+function normalizeAddressId(raw, indexLabel) {
+  const prefix = indexLabel ? `${indexLabel}: ` : "";
+  const addressId = raw?.address_id ?? raw?.id;
+  if (isBlankAddressValue(addressId)) {
+    return { error: `${prefix}address_id is required` };
+  }
+  return { data: Number(addressId) };
+}
+
+function validateUpdateAddressEntry(raw, indexLabel) {
+  const prefix = indexLabel ? `${indexLabel}: ` : "";
+  const idResult = normalizeAddressId(raw, indexLabel);
+  if (idResult.error) return idResult;
+
+  const fieldResult = validateSingleAddressEntry(raw, indexLabel);
+  if (fieldResult.error) return fieldResult;
+
+  return {
+    data: {
+      address_id: idResult.data,
+      ...fieldResult.data,
+    },
+  };
+}
+
+function normalizeAddressUpdatePayload(address_info, address_idBody) {
+  if (address_info == null) {
+    return { error: "address_info is required" };
+  }
+
+  let items;
+  if (Array.isArray(address_info)) {
+    items = address_info;
+  } else if (typeof address_info === "object") {
+    if (
+      !isBlankAddressValue(address_idBody) &&
+      isBlankAddressValue(address_info.address_id) &&
+      isBlankAddressValue(address_info.id)
+    ) {
+      return {
+        error:
+          "address_info must be an array of exactly 2 addresses for update",
+      };
+    }
+    items = [address_info];
+  } else {
+    return { error: "address_info must be an object or array" };
+  }
+
+  if (items.length !== 2) {
+    return { error: "address_info must contain exactly 2 addresses" };
+  }
+
+  const normalized = [];
+  const seenIds = new Set();
+
+  for (let i = 0; i < items.length; i += 1) {
+    const label = `Address ${i + 1}`;
+    const result = validateUpdateAddressEntry(items[i], label);
+    if (result.error) return result;
+
+    if (seenIds.has(result.data.address_id)) {
+      return { error: "Duplicate address_id in address_info" };
+    }
+    seenIds.add(result.data.address_id);
+    normalized.push(result.data);
+  }
+
+  const typeCheck = validateAddressTypePair(
+    normalized.map((row) => row.address_type),
+    "address_info",
+  );
+  if (typeCheck.error) return typeCheck;
+
+  return { data: normalized };
+}
+
+function normalizeStoredAddressType(value) {
+  if (value == null) return null;
+  return String(value).trim().toLowerCase();
+}
+
+/**
+ * Simulates final address types after updates and enforces:
+ * - exactly 2 addresses total
+ * - one permanent and one current (types must differ)
+ */
+function validateProjectedAddressTypes(existingRows, updates) {
+  const projected = new Map(
+    existingRows.map((row) => [
+      Number(row.id),
+      normalizeStoredAddressType(row.address_type),
+    ]),
+  );
+
+  for (const update of updates) {
+    projected.set(Number(update.address_id), update.address_type);
+  }
+
+  if (projected.size !== 2) {
+    return {
+      error:
+        "Employee must have exactly 2 addresses (one permanent and one current).",
+    };
+  }
+
+  const typeCheck = validateAddressTypePair([...projected.values()]);
+  if (typeCheck.error) {
+    return {
+      error: typeCheck.error,
+      warning: typeCheck.warning ?? undefined,
+    };
+  }
+
+  return typeCheck;
+}
+
 export const update_user_address_controller = async (req, res) => {
   let connection;
   try {
-    const {
-      user_id,
-      org_id,
-      country,
-      state,
-      district,
-      city,
-      is_from_village,
-      village_name,
-      street,
-      house_number,
-      zip_code,
-      address_id,
-    } = req.body;
     const { user_id: action_user_id } = req.user || {};
-    const isProvided = (value) => value !== undefined;
-    const isMissing = (value) =>
-      value === undefined || value === null || String(value).trim() === "";
+    const org_id = req.org_id;
+    const { address_info, employee_id, address_id: addressIdBody } = req.body;
 
-    if (isMissing(user_id) || isMissing(org_id) || isMissing(address_id)) {
-      return res
-        .status(400)
-        .json({ message: "address_id, user_id and org_id are required" });
-    }
-
-    const patchFields = {
-      country,
-      state,
-      district,
-      city,
-      is_from_village,
-      village_name,
-      street,
-      house_number,
-      zip_code,
-    };
-
-    if (!Object.values(patchFields).some(isProvided)) {
-      return res.status(400).json({
-        message: "Provide at least one address field to update",
+    if (!action_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
       });
     }
 
-    // Check If Action User Is Valid
-    const action_user_check = "SELECT user_name from apt_users where id = ?";
-    // Check If Action User Is Valid Member Of The Organization
-    const action_user_member_check =
-      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
-    // Check Organization Is Valid
-    const organization_check = "SELECT * from apt_organizations where id = ?";
-    // Check If User Is Valid
-    const user_check = "SELECT user_name from apt_users where id = ?";
-    // Check If User Is Valid Member Of The Organization
-    const user_member_check =
-      "SELECT * from apt_org_members where user_id = ? and org_id = ?";
-    // Get Existing Address From User Address Table -> user_address
-    const get_address_query =
-      "SELECT * FROM user_address WHERE user_id = ? AND org_id = ? AND id = ? FOR UPDATE";
-    // Update Address In User Address Table -> user_address
-    const update_address_query = (sets) =>
-      `UPDATE user_address SET ${sets.join(", ")} WHERE user_id = ? AND org_id = ? AND id = ?`;
-    // Save Activity In User Activity Logs Table -> apt_user_activity_logs
-    const save_activity_query =
-      "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
+    if (isBlankAddressValue(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
 
-    // Start Transaction ::
+    if (isBlankAddressValue(employee_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    const payloadResult = normalizeAddressUpdatePayload(
+      address_info,
+      addressIdBody,
+    );
+    if (payloadResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: payloadResult.error,
+      });
+    }
+
+    const updates = payloadResult.data;
+
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
 
-    const [actionUserResult] = await connection.query(action_user_check, [
-      action_user_id,
-    ]);
-    if (actionUserResult.length === 0) {
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
       await connection.rollback();
-      return res.status(404).json({ message: "Action user not found" });
-    }
-    const action_user_name = actionUserResult[0].user_name;
-
-    const [actionMemberResult] = await connection.query(
-      action_user_member_check,
-      [action_user_id, org_id],
-    );
-    if (actionMemberResult.length === 0) {
-      await connection.rollback();
-      return res
-        .status(403)
-        .json({ message: "Action user is not a member of this organization" });
-    }
-
-    const [organizationResult] = await connection.query(organization_check, [
-      org_id,
-    ]);
-    if (organizationResult.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: "Organization not found" });
-    }
-
-    const [userResult] = await connection.query(user_check, [user_id]);
-    if (userResult.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: "User not found" });
-    }
-    const affected_user_name = userResult[0].user_name;
-
-    const [userMemberResult] = await connection.query(user_member_check, [
-      user_id,
-      org_id,
-    ]);
-    if (userMemberResult.length === 0) {
-      await connection.rollback();
-      return res
-        .status(404)
-        .json({ message: "User is not a member of this organization" });
-    }
-
-    const [addressRows] = await connection.query(get_address_query, [
-      user_id,
-      org_id,
-      address_id,
-    ]);
-    if (addressRows.length === 0) {
-      await connection.rollback();
-      return res.status(404).json({ message: "User address not found" });
-    }
-    const oldAddress = addressRows[0];
-
-    const nextIsFromVillage = isProvided(is_from_village)
-      ? is_from_village === true ||
-        is_from_village === 1 ||
-        String(is_from_village).toLowerCase() === "true" ||
-        String(is_from_village) === "1"
-        ? 1
-        : 0
-      : Number(oldAddress.is_from_village) === 1
-        ? 1
-        : 0;
-
-    const nextVillageName =
-      nextIsFromVillage === 1
-        ? isProvided(village_name)
-          ? String(village_name).trim()
-          : oldAddress.village_name
-        : null;
-
-    if (nextIsFromVillage === 1 && isMissing(nextVillageName)) {
-      await connection.rollback();
-      return res.status(400).json({
-        message: "village_name is required when is_from_village is true",
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
       });
     }
 
-    const sets = [];
-    const values = [];
-    const changedPayload = {};
-
-    const addUpdate = (column, value) => {
-      sets.push(`${column} = ?`);
-      values.push(value);
-      changedPayload[column] = value;
-    };
-
-    if (isProvided(country)) addUpdate("country", country);
-    if (isProvided(state)) addUpdate("state", state);
-    if (isProvided(district)) addUpdate("district", district);
-    if (isProvided(city)) addUpdate("city", city);
-    if (isProvided(is_from_village)) {
-      addUpdate("is_from_village", nextIsFromVillage);
-      addUpdate("village_name", nextVillageName);
-    } else if (isProvided(village_name)) {
-      addUpdate("village_name", nextVillageName);
-    }
-    if (isProvided(street)) addUpdate("street", street);
-    if (isProvided(house_number)) addUpdate("house_number", house_number);
-    if (isProvided(zip_code)) addUpdate("zip_code", zip_code);
-
-    if (sets.length === 0) {
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
       await connection.rollback();
-      return res.status(400).json({
-        message: "Provide at least one address field to update",
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found in this organization",
       });
     }
 
-    values.push(user_id, org_id, address_id);
-    const [updateResult] = await connection.query(
-      update_address_query(sets),
-      values,
+    const [existingRows] = await connection.query(
+      `SELECT
+        id,
+        user_id,
+        org_id,
+        address_type,
+        country,
+        state,
+        district,
+        city,
+        is_from_village,
+        village_name,
+        street,
+        house_number,
+        zip_code
+      FROM user_address
+      WHERE user_id = ? AND org_id = ?
+      ORDER BY id ASC
+      FOR UPDATE`,
+      [employee_id, org_id],
     );
-    if (!updateResult.affectedRows) {
+
+    if (!existingRows.length) {
       await connection.rollback();
-      return res.status(404).json({ message: "User address not found" });
+      return res.status(404).json({
+        success: false,
+        message: "No employee addresses found. Use add address first.",
+      });
     }
 
-    await connection.query(save_activity_query, [
-      action_user_id,
-      user_id,
-      org_id,
-      "UPDATE_USER_ADDRESS",
-      JSON.stringify(oldAddress),
-      JSON.stringify(changedPayload),
-      `Address updated for ${affected_user_name} by ${action_user_name}`,
-    ]);
+    if (existingRows.length !== 2) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        message:
+          "Employee must have exactly 2 saved addresses before update. Contact support if records are inconsistent.",
+      });
+    }
+
+    const existingById = new Map(existingRows.map((row) => [Number(row.id), row]));
+
+    for (const update of updates) {
+      if (!existingById.has(Number(update.address_id))) {
+        await connection.rollback();
+        return res.status(404).json({
+          success: false,
+          message: `Address ${update.address_id} not found for this employee`,
+        });
+      }
+    }
+
+    const updateIds = new Set(updates.map((row) => Number(row.address_id)));
+    for (const row of existingRows) {
+      if (!updateIds.has(Number(row.id))) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message:
+            "Both saved addresses must be included in address_info when updating.",
+        });
+      }
+    }
+
+    const projectedValidation = validateProjectedAddressTypes(
+      existingRows,
+      updates,
+    );
+    if (projectedValidation.error) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        message: projectedValidation.error,
+        warning: projectedValidation.warning ?? undefined,
+      });
+    }
+
+    const updateSql = `UPDATE user_address SET
+      address_type = ?,
+      country = ?,
+      state = ?,
+      district = ?,
+      city = ?,
+      is_from_village = ?,
+      village_name = ?,
+      street = ?,
+      house_number = ?,
+      zip_code = ?
+    WHERE id = ? AND user_id = ? AND org_id = ?`;
+
+    const oldSnapshots = [];
+    const updatedAddresses = [];
+
+    for (const update of updates) {
+      const existing = existingById.get(Number(update.address_id));
+
+      oldSnapshots.push({
+        id: existing.id,
+        address_type: existing.address_type,
+        country: existing.country,
+        state: existing.state,
+        district: existing.district,
+        city: existing.city,
+        is_from_village: existing.is_from_village,
+        village_name: existing.village_name,
+        street: existing.street,
+        house_number: existing.house_number,
+        zip_code: existing.zip_code,
+      });
+
+      const [updateResult] = await connection.query(updateSql, [
+        update.address_type,
+        update.country,
+        update.state,
+        update.district,
+        update.city,
+        update.is_from_village ? 1 : 0,
+        update.village_name,
+        update.street,
+        update.house_number,
+        update.zip_code,
+        update.address_id,
+        employee_id,
+        org_id,
+      ]);
+
+      if (!updateResult?.affectedRows) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `Failed to update address ${update.address_id}`,
+        });
+      }
+
+      const [updatedRows] = await connection.query(
+        `SELECT
+          id,
+          user_id,
+          org_id,
+          address_type,
+          country,
+          state,
+          district,
+          city,
+          is_from_village,
+          village_name,
+          street,
+          house_number,
+          zip_code
+        FROM user_address
+        WHERE id = ?
+        LIMIT 1`,
+        [update.address_id],
+      );
+
+      updatedAddresses.push(updatedRows[0]);
+    }
+
+    const [saveActivityResult] = await connection.query(
+      USER_ADDRESS_ACTIVITY_SQL,
+      [
+        action_user_id,
+        employee_id,
+        org_id,
+        "UPDATE_USER_ADDRESS",
+        JSON.stringify(oldSnapshots),
+        JSON.stringify(updatedAddresses),
+        "Both employee addresses updated",
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
 
     await connection.commit();
 
-    return res.status(200).json({
-      message: "User address updated successfully",
-      data: {
+    const [allAddresses] = await connection.query(
+      `SELECT
+        id,
         user_id,
         org_id,
-        address_id,
-        ...changedPayload,
+        address_type,
+        country,
+        state,
+        district,
+        city,
+        is_from_village,
+        village_name,
+        street,
+        house_number,
+        zip_code
+      FROM user_address
+      WHERE user_id = ? AND org_id = ?
+      ORDER BY id ASC`,
+      [employee_id, org_id],
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Employee addresses updated successfully",
+      data: {
+        employee_id: Number(employee_id),
+        org_id: Number(org_id),
+        updated: updatedAddresses,
+        addresses: allAddresses,
       },
     });
   } catch (error) {
-    if (connection) await connection.rollback();
-    console.error("Error updating user address: ", error);
-    return res.status(500).json({ message: "Error updating user address" });
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("update_user_address_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
   } finally {
     if (connection) connection.release();
   }
@@ -2389,6 +2769,268 @@ function normalizeRelationBloodLine(value) {
 const EXTERNAL_INFO_ACTIVITY_SQL =
   "INSERT INTO apt_user_activity_logs (performed_by, affected_user_id, org_id, action_type, old_value, new_value, action_reason) VALUES (?, ?, ?, ?, ?, ?, ?)";
 
+const PERSON_ROLE_VALUES = ["hr", "reporting_manager"];
+
+const VERIFICATION_STATUS_VALUES = [
+  "pending",
+  "in_progress",
+  "verified",
+  "failed",
+  "unable_to_contact",
+];
+
+function normalizeVerificationStatus(value) {
+  if (isBlankValue(value)) return null;
+  const normalized = String(value).trim().toLowerCase();
+  return VERIFICATION_STATUS_VALUES.includes(normalized) ? normalized : null;
+}
+
+function resolveVerifiedAtForStatus(status) {
+  if (
+    status === "verified" ||
+    status === "failed" ||
+    status === "unable_to_contact"
+  ) {
+    return new Date();
+  }
+  return null;
+}
+
+function isBlankValue(v) {
+  return v === undefined || v === null || String(v).trim() === "";
+}
+
+function normalizeOptionalString(value, maxLen, fieldLabel) {
+  if (value === undefined || value === null) return null;
+  const s = String(value).trim();
+  if (s === "") return null;
+  if (s.length > maxLen) {
+    return {
+      error: `${fieldLabel} must be at most ${maxLen} characters`,
+    };
+  }
+  return s;
+}
+
+function parseOptionalDate(value, fieldLabel) {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return null;
+  }
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    return { error: `${fieldLabel} must be a valid date` };
+  }
+  return d.toISOString().slice(0, 10);
+}
+
+function isValidEmail(value) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(value).trim());
+}
+
+/**
+ * Validates one previous-company reference payload from the frontend.
+ *
+ * Expected shape (single object or array item):
+ * {
+ *   previous_company_name: string;
+ *   company_email?: string;
+ *   employee_code?: string;
+ *   designation?: string;
+ *   employment_start_date?: string;
+ *   employment_end_date?: string;
+ *   person_name: string;
+ *   person_role: "hr" | "reporting_manager";
+ *   person_contact_number1: string;
+ *   person_contact_number2?: string;
+ *   person_contact_email: string;
+ * }
+ */
+function validateBackgroundVerificationInfo(raw, indexLabel = "") {
+  const prefix = indexLabel ? `${indexLabel}: ` : "";
+
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) {
+    return {
+      error: `${prefix}background_verification_info must be a valid object`,
+    };
+  }
+
+  if (isBlankValue(raw.previous_company_name)) {
+    return { error: `${prefix}previous_company_name is required` };
+  }
+  if (isBlankValue(raw.person_name)) {
+    return { error: `${prefix}person_name is required` };
+  }
+  if (isBlankValue(raw.person_role)) {
+    return { error: `${prefix}person_role is required` };
+  }
+  if (isBlankValue(raw.person_contact_number1)) {
+    return { error: `${prefix}person_contact_number1 is required` };
+  }
+  if (isBlankValue(raw.person_contact_email)) {
+    return { error: `${prefix}person_contact_email is required` };
+  }
+
+  const previous_company_name = String(raw.previous_company_name).trim();
+  if (previous_company_name.length > 255) {
+    return {
+      error: `${prefix}previous_company_name must be at most 255 characters`,
+    };
+  }
+
+  const person_name = String(raw.person_name).trim();
+  if (person_name.length > 250) {
+    return {
+      error: `${prefix}person_name must be at most 250 characters`,
+    };
+  }
+
+  const person_role = String(raw.person_role).trim().toLowerCase();
+  if (!PERSON_ROLE_VALUES.includes(person_role)) {
+    return {
+      error: `${prefix}person_role must be one of: ${PERSON_ROLE_VALUES.join(", ")}`,
+    };
+  }
+
+  const person_contact_number1 = String(raw.person_contact_number1).trim();
+  if (person_contact_number1.length > 20) {
+    return {
+      error: `${prefix}person_contact_number1 must be at most 20 characters`,
+    };
+  }
+
+  let person_contact_number2 = null;
+  if (!isBlankValue(raw.person_contact_number2)) {
+    person_contact_number2 = String(raw.person_contact_number2).trim();
+    if (person_contact_number2.length > 20) {
+      return {
+        error: `${prefix}person_contact_number2 must be at most 20 characters`,
+      };
+    }
+  }
+
+  const person_contact_email = String(raw.person_contact_email).trim();
+  if (person_contact_email.length > 255) {
+    return {
+      error: `${prefix}person_contact_email must be at most 255 characters`,
+    };
+  }
+  if (!isValidEmail(person_contact_email)) {
+    return {
+      error: `${prefix}person_contact_email must be a valid email address`,
+    };
+  }
+
+  let company_email = null;
+  if (!isBlankValue(raw.company_email)) {
+    company_email = String(raw.company_email).trim();
+    if (company_email.length > 255) {
+      return {
+        error: `${prefix}company_email must be at most 255 characters`,
+      };
+    }
+    if (!isValidEmail(company_email)) {
+      return { error: `${prefix}company_email must be a valid email address` };
+    }
+  }
+
+  const employee_codeResult = normalizeOptionalString(
+    raw.employee_code,
+    100,
+    `${prefix}employee_code`,
+  );
+  if (
+    employee_codeResult &&
+    typeof employee_codeResult === "object" &&
+    "error" in employee_codeResult
+  ) {
+    return employee_codeResult;
+  }
+
+  const designationResult = normalizeOptionalString(
+    raw.designation,
+    150,
+    `${prefix}designation`,
+  );
+  if (
+    designationResult &&
+    typeof designationResult === "object" &&
+    "error" in designationResult
+  ) {
+    return designationResult;
+  }
+
+  const employment_start_date = parseOptionalDate(
+    raw.employment_start_date,
+    `${prefix}employment_start_date`,
+  );
+  if (
+    employment_start_date &&
+    typeof employment_start_date === "object" &&
+    "error" in employment_start_date
+  ) {
+    return employment_start_date;
+  }
+
+  const employment_end_date = parseOptionalDate(
+    raw.employment_end_date,
+    `${prefix}employment_end_date`,
+  );
+  if (
+    employment_end_date &&
+    typeof employment_end_date === "object" &&
+    "error" in employment_end_date
+  ) {
+    return employment_end_date;
+  }
+
+  if (
+    employment_start_date &&
+    employment_end_date &&
+    employment_end_date < employment_start_date
+  ) {
+    return {
+      error: `${prefix}employment_end_date cannot be before employment_start_date`,
+    };
+  }
+
+  return {
+    data: {
+      previous_company_name,
+      company_email,
+      employee_code: employee_codeResult,
+      designation: designationResult,
+      employment_start_date,
+      employment_end_date,
+      person_name,
+      person_role,
+      person_contact_number1,
+      person_contact_number2,
+      person_contact_email,
+    },
+  };
+}
+
+function normalizeBackgroundVerificationPayload(raw) {
+  if (raw == null) {
+    return { error: "background_verification_info is required" };
+  }
+
+  const items = Array.isArray(raw) ? raw : [raw];
+  if (items.length === 0) {
+    return { error: "background_verification_info cannot be empty" };
+  }
+
+  const normalized = [];
+  for (let i = 0; i < items.length; i += 1) {
+    const label = items.length > 1 ? `Record ${i + 1}` : "";
+    const result = validateBackgroundVerificationInfo(items[i], label);
+    if (result.error) return result;
+    normalized.push(result.data);
+  }
+
+  return { data: normalized };
+}
+
 // User External Information Routes ::
 
 // Add user external information controller ::
@@ -2733,7 +3375,8 @@ export const update_user_external_information_controller = async (req, res) => {
       await connection.rollback();
       return res.status(404).json({
         success: false,
-        message: "External information not found for this user and organization",
+        message:
+          "External information not found for this user and organization",
       });
     }
 
@@ -2744,7 +3387,9 @@ export const update_user_external_information_controller = async (req, res) => {
     const nextNumber =
       patchNumber !== undefined ? patchNumber : previous.emergency_number;
     const nextRelation =
-      patchRelation !== undefined ? patchRelation : previous.relation_blood_line;
+      patchRelation !== undefined
+        ? patchRelation
+        : previous.relation_blood_line;
 
     const [updateResult] = await connection.query(
       `UPDATE user_external_info SET
@@ -2897,7 +3542,8 @@ export const delete_user_external_information_controller = async (req, res) => {
       await connection.rollback();
       return res.status(404).json({
         success: false,
-        message: "External information not found for this user and organization",
+        message:
+          "External information not found for this user and organization",
       });
     }
 
@@ -2956,18 +3602,13 @@ export const delete_user_external_information_controller = async (req, res) => {
   }
 };
 
-export const get_single_employee_controller = async (
-  req,
-  res,
-) => {
+export const get_single_employee_controller = async (req, res) => {
   let connection;
 
   try {
     const { user_id, org_id: orgIdRaw } = req.query;
 
-    const {
-      user_id: action_user_id,
-    } = req.user || {};
+    const { user_id: action_user_id } = req.user || {};
 
     const org_id = Number(orgIdRaw);
 
@@ -3004,24 +3645,22 @@ export const get_single_employee_controller = async (
     // CHECK ACTION USER MEMBERSHIP
     // ---------------------------------------------------
 
-    const [actionMemberResult] =
-      await connection.query(
-        `
+    const [actionMemberResult] = await connection.query(
+      `
         SELECT id
         FROM apt_org_members
         WHERE user_id = ?
         AND org_id = ?
         `,
-        [action_user_id, org_id],
-      );
+      [action_user_id, org_id],
+    );
 
     if (actionMemberResult.length === 0) {
       await connection.rollback();
 
       return res.status(403).json({
         success: false,
-        message:
-          "Action user is not a member of this organization",
+        message: "Action user is not a member of this organization",
       });
     }
 
@@ -3029,24 +3668,22 @@ export const get_single_employee_controller = async (
     // CHECK EMPLOYEE MEMBERSHIP
     // ---------------------------------------------------
 
-    const [employeeMemberResult] =
-      await connection.query(
-        `
+    const [employeeMemberResult] = await connection.query(
+      `
         SELECT id
         FROM apt_org_members
         WHERE user_id = ?
         AND org_id = ?
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     if (employeeMemberResult.length === 0) {
       await connection.rollback();
 
       return res.status(403).json({
         success: false,
-        message:
-          "Employee is not a member of this organization",
+        message: "Employee is not a member of this organization",
       });
     }
 
@@ -3054,9 +3691,8 @@ export const get_single_employee_controller = async (
     // EMPLOYEE BASIC INFO
     // ---------------------------------------------------
 
-    const [employeeInfo] =
-      await connection.query(
-        `
+    const [employeeInfo] = await connection.query(
+      `
         SELECT
           user.id,
           user.user_name,
@@ -3064,17 +3700,6 @@ export const get_single_employee_controller = async (
           user.user_phone,
           user.user_image,
           user.created_at,
-
-          user_address.id AS address_id,
-          user_address.country,
-          user_address.state,
-          user_address.district,
-          user_address.city,
-          user_address.is_from_village,
-          user_address.village_name,
-          user_address.street,
-          user_address.house_number,
-          user_address.zip_code,
 
           user_external_info.emergency_contact_name,
           user_external_info.emergency_number,
@@ -3111,10 +3736,6 @@ export const get_single_employee_controller = async (
           ON apt_roles.id = apt_user_roles.role_id
           AND apt_roles.org_id = ?
 
-        LEFT JOIN user_address
-          ON user.id = user_address.user_id
-          AND user_address.org_id = ?
-
         LEFT JOIN user_external_info
           ON user.id = user_external_info.user_id
           AND user_external_info.org_id = ?
@@ -3134,18 +3755,8 @@ export const get_single_employee_controller = async (
         WHERE user.id = ?
         LIMIT 1
         `,
-        [
-          org_id,
-          org_id,
-          org_id,
-          org_id,
-          org_id,
-          org_id,
-          org_id,
-          org_id,
-          user_id,
-        ],
-      );
+      [org_id, org_id, org_id, org_id, org_id, org_id, org_id, user_id],
+    );
 
     if (employeeInfo.length === 0) {
       await connection.rollback();
@@ -3155,6 +3766,35 @@ export const get_single_employee_controller = async (
         message: "Employee not found",
       });
     }
+
+    // ---------------------------------------------------
+    // EMPLOYEE ADDRESSES
+    // ---------------------------------------------------
+
+    const [addresses] = await connection.query(
+      `
+        SELECT
+          id,
+          id AS address_id,
+          user_id,
+          org_id,
+          address_type,
+          country,
+          state,
+          district,
+          city,
+          is_from_village,
+          village_name,
+          street,
+          house_number,
+          zip_code
+        FROM user_address
+        WHERE user_id = ?
+        AND org_id = ?
+        ORDER BY FIELD(address_type, 'permanent', 'current'), id ASC
+        `,
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // EMPLOYEE DOCUMENTS
@@ -3190,73 +3830,68 @@ export const get_single_employee_controller = async (
     // LEAVE BALANCE
     // ---------------------------------------------------
 
-    const [leaveBalance] =
-      await connection.query(
-        `
+    const [leaveBalance] = await connection.query(
+      `
         SELECT *
         FROM leave_balance
         WHERE user_id = ?
         AND org_id = ?
         ORDER BY year DESC, month DESC
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // LEAVE QUERIES
     // ---------------------------------------------------
 
-    const [leaveQueries] =
-      await connection.query(
-        `
+    const [leaveQueries] = await connection.query(
+      `
         SELECT *
         FROM leave_quiry
         WHERE user_id = ?
         AND org_id = ?
         ORDER BY created_at DESC
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // ATTENDANCE LOGS
     // ---------------------------------------------------
 
-    const [attendanceLogs] =
-      await connection.query(
-        `
+    const [attendanceLogs] = await connection.query(
+      `
         SELECT *
         FROM attendance_logs
         WHERE user_id = ?
         AND org_id = ?
         ORDER BY timestamp_time DESC
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // ATTENDANCE RELATED QUERIES
     // ---------------------------------------------------
 
-    const [attendanceQueries] =
-      await connection.query(
-        `
+    const [attendanceQueries] = await connection.query(
+      `
         SELECT *
         FROM attendance_related_queries
         WHERE user_id = ?
         AND org_id = ?
         ORDER BY created_at DESC
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // IP ASSIGNMENTS
     // ---------------------------------------------------
 
-    const [ipAssignments] =
-      await connection.query(
-        `
+    const [ipAssignments] = await connection.query(
+      `
         SELECT
           ip_address_assignments.*,
           organization_ips.label AS org_ip_label,
@@ -3271,16 +3906,15 @@ export const get_single_employee_controller = async (
         AND ip_address_assignments.org_id = ?
         ORDER BY ip_address_assignments.created_at DESC
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // FEATURE OVERRIDES
     // ---------------------------------------------------
 
-    const [featureOverrides] =
-      await connection.query(
-        `
+    const [featureOverrides] = await connection.query(
+      `
         SELECT
           aufo.*,
           apt_features.feature_name,
@@ -3291,16 +3925,15 @@ export const get_single_employee_controller = async (
         WHERE aufo.user_id = ?
         AND aufo.org_id = ?
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // EMPLOYEE REFERENCES
     // ---------------------------------------------------
 
-    const [references] =
-      await connection.query(
-        `
+    const [references] = await connection.query(
+      `
         SELECT
           er.*,
 
@@ -3316,8 +3949,8 @@ export const get_single_employee_controller = async (
         WHERE er.employee_id = ?
         AND er.org_id = ?
         `,
-        [user_id, org_id],
-      );
+      [user_id, org_id],
+    );
 
     // ---------------------------------------------------
     // NORMALIZED RESPONSE
@@ -3325,6 +3958,8 @@ export const get_single_employee_controller = async (
 
     const normalizedData = {
       user_info: employeeInfo[0],
+
+      addresses: addresses || [],
 
       documents: documents || [],
 
@@ -3349,15 +3984,11 @@ export const get_single_employee_controller = async (
 
     return res.status(200).json({
       success: true,
-      message:
-        "Employee details fetched successfully",
+      message: "Employee details fetched successfully",
       data: normalizedData,
     });
   } catch (error) {
-    console.error(
-      "get_single_employee_controller:",
-      error,
-    );
+    console.error("get_single_employee_controller:", error);
 
     if (connection) {
       await connection.rollback();
@@ -3373,7 +4004,6 @@ export const get_single_employee_controller = async (
     }
   }
 };
-
 
 /** Derive Cloudinary `public_id` + resource type from a stored `secure_url`. */
 function cloudinaryMetaFromStoredUrl(url) {
@@ -3542,7 +4172,889 @@ export const update_my_profile_image_controller = async (req, res) => {
 };
 
 // User Reference Controller ::
-export const create_user_reference_controller = async (req, res) => { }
-export const update_user_reference_controller = async (req, res) => { } 
-export const get_all_user_references_controller = async (req, res) => { }
-export const get_single_user_reference_controller = async (req, res) => { }
+export const create_user_background_verification_controller = async (
+  req,
+  res,
+) => {
+  let connection;
+  try {
+    const { user_id: action_user_id } = req.user || {};
+    const org_id = req.org_id;
+    const { employee_id, background_verification_info } = req.body;
+
+    if (!action_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (isBlankValue(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
+
+    if (isBlankValue(employee_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    const payloadResult = normalizeBackgroundVerificationPayload(
+      background_verification_info,
+    );
+    if (payloadResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: payloadResult.error,
+      });
+    }
+
+    const referenceRows = payloadResult.data;
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found in this organization",
+      });
+    }
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [orgResult] = await connection.query(
+      "SELECT id FROM apt_organizations WHERE id = ? LIMIT 1",
+      [org_id],
+    );
+    if (!orgResult.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Organization not found",
+      });
+    }
+
+    const insertSql = `INSERT INTO previous_company_references (
+        employee_id,
+        org_id,
+        previous_company_name,
+        company_email,
+        employee_code,
+        designation,
+        employment_start_date,
+        employment_end_date,
+        person_name,
+        person_role,
+        person_contact_number1,
+        person_contact_number2,
+        person_contact_email,
+        verification_status
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`;
+
+    const savedReferences = [];
+
+    for (const row of referenceRows) {
+      const [insertResult] = await connection.query(insertSql, [
+        employee_id,
+        org_id,
+        row.previous_company_name,
+        row.company_email,
+        row.employee_code,
+        row.designation,
+        row.employment_start_date,
+        row.employment_end_date,
+        row.person_name,
+        row.person_role,
+        row.person_contact_number1,
+        row.person_contact_number2,
+        row.person_contact_email,
+      ]);
+
+      if (!insertResult?.affectedRows) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: "Failed to save previous company reference",
+        });
+      }
+
+      const [createdRows] = await connection.query(
+        `SELECT
+          id,
+          employee_id,
+          org_id,
+          previous_company_name,
+          company_email,
+          employee_code,
+          designation,
+          employment_start_date,
+          employment_end_date,
+          person_name,
+          person_role,
+          person_contact_number1,
+          person_contact_number2,
+          person_contact_email,
+          verification_status,
+          verification_notes,
+          verification_by_id,
+          verification_by_name,
+          verified_at,
+          created_at,
+          updated_at
+        FROM previous_company_references
+        WHERE id = ?
+        LIMIT 1`,
+        [insertResult.insertId],
+      );
+
+      savedReferences.push(createdRows[0]);
+    }
+
+    const activityPayload = {
+      employee_id: Number(employee_id),
+      org_id: Number(org_id),
+      references: savedReferences,
+    };
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        employee_id,
+        org_id,
+        "ADD_PREVIOUS_COMPANY_REFERENCE",
+        null,
+        JSON.stringify(activityPayload),
+        savedReferences.length === 1
+          ? "Previous company reference added for background verification"
+          : `${savedReferences.length} previous company references added for background verification`,
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(201).json({
+      success: true,
+      message:
+        savedReferences.length === 1
+          ? "Previous company reference saved successfully"
+          : `${savedReferences.length} previous company references saved successfully`,
+      data: {
+        employee_id: Number(employee_id),
+        org_id: Number(org_id),
+        references: savedReferences,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("create_user_background_verification_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const update_user_reference_controller = async (req, res) => {
+  let connection;
+  try {
+    const { user_id: action_user_id } = req.user || {};
+    const org_id = req.org_id;
+    const {
+      employee_id,
+      reference_id: referenceIdBody,
+      id: referenceIdAlt,
+      background_verification_info,
+    } = req.body;
+    const reference_id = referenceIdBody ?? referenceIdAlt;
+
+    if (!action_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (isBlankValue(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
+
+    if (isBlankValue(employee_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    if (isBlankValue(reference_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "reference_id is required",
+      });
+    }
+
+    if (background_verification_info == null) {
+      return res.status(400).json({
+        success: false,
+        message: "background_verification_info is required",
+      });
+    }
+
+    const validationResult = validateBackgroundVerificationInfo(
+      background_verification_info,
+    );
+    if (validationResult.error) {
+      return res.status(400).json({
+        success: false,
+        message: validationResult.error,
+      });
+    }
+
+    const patch = validationResult.data;
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found in this organization",
+      });
+    }
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [existingRows] = await connection.query(
+      `SELECT
+        id,
+        employee_id,
+        org_id,
+        previous_company_name,
+        company_email,
+        employee_code,
+        designation,
+        employment_start_date,
+        employment_end_date,
+        person_name,
+        person_role,
+        person_contact_number1,
+        person_contact_number2,
+        person_contact_email,
+        verification_status,
+        verification_notes,
+        verification_by_id,
+        verification_by_name,
+        verified_at,
+        created_at,
+        updated_at
+      FROM previous_company_references
+      WHERE id = ? AND employee_id = ? AND org_id = ?
+      LIMIT 1`,
+      [reference_id, employee_id, org_id],
+    );
+
+    if (!existingRows.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Previous company reference not found for this employee",
+      });
+    }
+
+    const existing = existingRows[0];
+    const shouldResetVerification = existing.verification_status !== "pending";
+
+    const nextVerificationStatus = shouldResetVerification
+      ? "pending"
+      : existing.verification_status;
+    const nextVerificationNotes = shouldResetVerification
+      ? null
+      : existing.verification_notes;
+    const nextVerificationById = shouldResetVerification
+      ? null
+      : existing.verification_by_id;
+    const nextVerificationByName = shouldResetVerification
+      ? null
+      : existing.verification_by_name;
+    const nextVerifiedAt = shouldResetVerification
+      ? null
+      : existing.verified_at;
+
+    const [updateResult] = await connection.query(
+      `UPDATE previous_company_references SET
+        previous_company_name = ?,
+        company_email = ?,
+        employee_code = ?,
+        designation = ?,
+        employment_start_date = ?,
+        employment_end_date = ?,
+        person_name = ?,
+        person_role = ?,
+        person_contact_number1 = ?,
+        person_contact_number2 = ?,
+        person_contact_email = ?,
+        verification_status = ?,
+        verification_notes = ?,
+        verification_by_id = ?,
+        verification_by_name = ?,
+        verified_at = ?
+      WHERE id = ? AND employee_id = ? AND org_id = ?`,
+      [
+        patch.previous_company_name,
+        patch.company_email,
+        patch.employee_code,
+        patch.designation,
+        patch.employment_start_date,
+        patch.employment_end_date,
+        patch.person_name,
+        patch.person_role,
+        patch.person_contact_number1,
+        patch.person_contact_number2,
+        patch.person_contact_email,
+        nextVerificationStatus,
+        nextVerificationNotes,
+        nextVerificationById,
+        nextVerificationByName,
+        nextVerifiedAt,
+        reference_id,
+        employee_id,
+        org_id,
+      ],
+    );
+
+    if (!updateResult?.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update previous company reference",
+      });
+    }
+
+    const [updatedRows] = await connection.query(
+      `SELECT
+        id,
+        employee_id,
+        org_id,
+        previous_company_name,
+        company_email,
+        employee_code,
+        designation,
+        employment_start_date,
+        employment_end_date,
+        person_name,
+        person_role,
+        person_contact_number1,
+        person_contact_number2,
+        person_contact_email,
+        verification_status,
+        verification_notes,
+        verification_by_id,
+        verification_by_name,
+        verified_at,
+        created_at,
+        updated_at
+      FROM previous_company_references
+      WHERE id = ?
+      LIMIT 1`,
+      [reference_id],
+    );
+
+    const updatedReference = updatedRows[0];
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        employee_id,
+        org_id,
+        "UPDATE_PREVIOUS_COMPANY_REFERENCE",
+        JSON.stringify(existing),
+        JSON.stringify(updatedReference),
+        shouldResetVerification
+          ? "Previous company reference updated; verification reset to pending"
+          : "Previous company reference updated",
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Previous company reference updated successfully",
+      data: {
+        employee_id: Number(employee_id),
+        org_id: Number(org_id),
+        reference: updatedReference,
+        verification_reset: shouldResetVerification,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error("update_user_reference_controller:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const update_employee_background_verification_status_controller = async (
+  req,
+  res,
+) => {
+  let connection;
+  try {
+    const { user_id: action_user_id } = req.user || {};
+    const org_id = req.org_id;
+    const { employee_id, verification_info } = req.body;
+
+    if (!action_user_id) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (isBlankValue(org_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
+
+    if (isBlankValue(employee_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    if (
+      verification_info == null ||
+      typeof verification_info !== "object" ||
+      Array.isArray(verification_info)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "verification_info is required",
+      });
+    }
+
+    const verification_id =
+      verification_info.verification_id ?? verification_info.reference_id;
+
+    if (isBlankValue(verification_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "verification_info.verification_id is required",
+      });
+    }
+
+    const nextStatus = normalizeVerificationStatus(
+      verification_info.verification_status,
+    );
+    if (!nextStatus) {
+      return res.status(400).json({
+        success: false,
+        message: `verification_info.verification_status must be one of: ${VERIFICATION_STATUS_VALUES.join(", ")}`,
+      });
+    }
+
+    let verification_notes = null;
+    if (
+      verification_info.verification_notes !== undefined &&
+      verification_info.verification_notes !== null
+    ) {
+      verification_notes = String(verification_info.verification_notes).trim();
+      if (verification_notes === "") {
+        verification_notes = null;
+      }
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found in this organization",
+      });
+    }
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(403).json({
+        success: false,
+        message: "Action user is not a member of this organization",
+      });
+    }
+
+    const [actionUserRows] = await connection.query(
+      `SELECT id, user_name FROM apt_users WHERE id = ? LIMIT 1`,
+      [action_user_id],
+    );
+    if (!actionUserRows.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Action user not found",
+      });
+    }
+
+    const verification_by_id = Number(action_user_id);
+    const verification_by_name =
+      actionUserRows[0].user_name != null &&
+      String(actionUserRows[0].user_name).trim() !== ""
+        ? String(actionUserRows[0].user_name).trim()
+        : null;
+
+    const [existingRows] = await connection.query(
+      `SELECT
+        id,
+        employee_id,
+        org_id,
+        previous_company_name,
+        verification_status,
+        verification_notes,
+        verification_by_id,
+        verification_by_name,
+        verified_at,
+        created_at,
+        updated_at
+      FROM previous_company_references
+      WHERE id = ? AND employee_id = ? AND org_id = ?
+      LIMIT 1`,
+      [verification_id, employee_id, org_id],
+    );
+
+    if (!existingRows.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Previous company reference not found for this employee",
+      });
+    }
+
+    const existing = existingRows[0];
+    const currentStatus = normalizeVerificationStatus(
+      existing.verification_status,
+    );
+
+    if (currentStatus === nextStatus) {
+      await connection.rollback();
+      return res.status(409).json({
+        success: false,
+        message: `Verification status is already set to ${nextStatus}`,
+      });
+    }
+
+    const verified_at = resolveVerifiedAtForStatus(nextStatus);
+
+    const [updateResult] = await connection.query(
+      `UPDATE previous_company_references SET
+        verification_status = ?,
+        verification_notes = ?,
+        verification_by_id = ?,
+        verification_by_name = ?,
+        verified_at = ?
+      WHERE id = ? AND employee_id = ? AND org_id = ?`,
+      [
+        nextStatus,
+        verification_notes,
+        verification_by_id,
+        verification_by_name,
+        verified_at,
+        verification_id,
+        employee_id,
+        org_id,
+      ],
+    );
+
+    if (!updateResult?.affectedRows) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to update verification status",
+      });
+    }
+
+    const [updatedRows] = await connection.query(
+      `SELECT
+        id,
+        employee_id,
+        org_id,
+        previous_company_name,
+        company_email,
+        employee_code,
+        designation,
+        employment_start_date,
+        employment_end_date,
+        person_name,
+        person_role,
+        person_contact_number1,
+        person_contact_number2,
+        person_contact_email,
+        verification_status,
+        verification_notes,
+        verification_by_id,
+        verification_by_name,
+        verified_at,
+        created_at,
+        updated_at
+      FROM previous_company_references
+      WHERE id = ?
+      LIMIT 1`,
+      [verification_id],
+    );
+
+    const updatedReference = updatedRows[0];
+
+    const [saveActivityResult] = await connection.query(
+      EXTERNAL_INFO_ACTIVITY_SQL,
+      [
+        action_user_id,
+        employee_id,
+        org_id,
+        "UPDATE_PREVIOUS_COMPANY_VERIFICATION_STATUS",
+        JSON.stringify({
+          id: existing.id,
+          verification_status: currentStatus,
+          verification_notes: existing.verification_notes,
+          verification_by_id: existing.verification_by_id,
+          verification_by_name: existing.verification_by_name,
+          verified_at: existing.verified_at,
+        }),
+        JSON.stringify({
+          id: updatedReference.id,
+          verification_status: updatedReference.verification_status,
+          verification_notes: updatedReference.verification_notes,
+          verification_by_id: updatedReference.verification_by_id,
+          verification_by_name: updatedReference.verification_by_name,
+          verified_at: updatedReference.verified_at,
+        }),
+        `Verification status changed from ${currentStatus} to ${nextStatus}`,
+      ],
+    );
+
+    if (!saveActivityResult || saveActivityResult.affectedRows < 1) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Failed to save activity log",
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Verification status updated successfully",
+      data: {
+        employee_id: Number(employee_id),
+        org_id: Number(org_id),
+        reference: updatedReference,
+      },
+    });
+  } catch (error) {
+    if (connection) await connection.rollback().catch(() => {});
+    console.error(
+      "update_employee_background_verification_status_controller:",
+      error,
+    );
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const get_all_user_references_controller = async (req, res) => {
+  let connection;
+  try {
+    const { user_id: action_user_id } = req.user;
+    const { org_id } = req;
+    const { status, limit, joining_date } = req.query;
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      return errorHandling(connection, res, "Action user not found", 404);
+    }
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      return errorHandling(connection, res, "Employee not found", 404);
+    }
+    const query = `
+    SELECT pcr.*,
+    
+    employee.user_name as employee_name,
+
+    verificator.user_name as verificator_name,
+    
+    membership_info.created_at as member_since
+
+    FROM previous_company_references as pcr
+
+    LEFT JOIN apt_users as employee
+      ON pcr.employee_id = employee.id
+
+    LEFT JOIN apt_users as verificator
+      ON pcr.verification_by_id = verificator.id
+    
+    LEFT JOIN apt_org_members as membership_info
+      ON employee.id = membership_info.user_id
+      AND membership_info.org_id = pcr.org_id
+
+    WHERE pcr.org_id = ?
+    `;
+    const params = [org_id];
+    if (status) {
+      query += `AND pcr.verification_status = ?`;
+      params.push(status);
+    }
+    if (limit) {
+      query += `LIMIT ?`;
+      params.push(limit);
+    }
+    if (joining_date) {
+      query += `AND employee.created_at = ?`;
+      params.push(joining_date);
+    }
+    const [results] = await connection.query(query, params);
+    if (results.affectedRows === 0) {
+      return errorHandling(connection, res, "No references found", 404);
+    }
+    return res.status(200).json({
+      success: true,
+      message: "References fetched successfully",
+      data: results,
+    });
+  } catch (error) {
+    console.error("get_all_user_references_controller:", error);
+    if (connection) {
+      return errorHandling(connection, res, "Internal server error", 500);
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
+export const get_single_user_reference_controller = async (req, res) => {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+    const { org_id } = req;
+    const { employee_id, reference_id } = req.params;
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      return errorHandling(connection, res, "Employee not found", 404);
+    }
+    if (!(await isEmployeeExists(connection, reference_id, org_id))) {
+      return errorHandling(connection, res, "Reference not found", 404);
+    }
+    const query = `
+    SELECT pcr.*,
+    
+    employee.user_name as employee_name,
+    employee.user_email as employee_email,
+    employee.user_phone as employee_phone,
+    employee.created_at as employee_joining_date,
+    employee.user_image as employee_image,
+    employee.id as employee_id,
+    
+    verificator.user_name as verificator_name,
+    verificator.user_email as verificator_email,
+    verificator.user_phone as verificator_phone,
+    verificator.created_at as verificator_joining_date,
+    verificator.user_image as verificator_image,
+    verificator.id as verificator_id,
+    
+    membership_info.created_at as member_since
+    
+    FROM previous_company_references as pcr
+    
+    LEFT JOIN apt_users as employee
+      ON pcr.employee_id = employee.id
+    
+    LEFT JOIN apt_users as verificator
+      ON pcr.verification_by_id = verificator.id
+    
+    LEFT JOIN apt_org_members as membership_info
+      ON employee.id = membership_info.user_id
+      AND membership_info.org_id = pcr.org_id
+    
+    WHERE pcr.org_id = ?
+    AND pcr.employee_id = ?
+    AND pcr.id = ?
+    `;
+    const params = [org_id, employee_id, reference_id];
+    const [results] = await connection.query(query, params);
+    if(results.affectedRows === 0) {
+      return errorHandling(connection, res, "Reference not found", 404);
+    }
+    return res.status(200).json({
+      success: true,
+      message: "Reference fetched successfully",
+      data: results[0],
+    });
+  } catch (error) {
+    console.error("get_single_user_reference_controller:", error);
+    if (connection) {
+      return errorHandling(connection, res, "Internal server error", 500);
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};

@@ -24,7 +24,7 @@ import user_membership_checker from "../middlewares/user_membership_checker.js";
 const router = Router();
 
 // Get Employees Full Information ::
-router.get("/get-employees-full-information", user_validation_middleware, req_sender_auth, user_membership_checker,  getEmployeesFullInformationController);
+router.get("/get-employees-full-information", user_validation_middleware, req_sender_auth, user_membership_checker, getEmployeesFullInformationController);
 
 router.get(
   "/my-assigned-leave-balances",

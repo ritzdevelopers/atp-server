@@ -496,3 +496,218 @@ export const assign__feature_access_to_the_employee = async (req, res) => {
     }
   }
 };
+
+const normalizeFeatureAccess = (feature_access) => {
+  if (Array.isArray(feature_access)) {
+    return feature_access
+      .filter((permission) => ALLOWED_PERMISSIONS.includes(permission))
+      .join("-");
+  }
+  if (typeof feature_access === "string") {
+    return feature_access
+      .split("-")
+      .filter((permission) => ALLOWED_PERMISSIONS.includes(permission))
+      .join("-");
+  }
+  return "";
+};
+
+export const assign_features_and_sub_features_to_the_employee = async (
+  req,
+  res,
+) => {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const { org_id } = req;
+    const { user_id: action_user_id } = req.user;
+    const { employee_id, features_data } = req.body;
+
+    /*
+    features_data = [
+      {
+          feature_id: Number,
+          access_permission: Boolean,
+          sub_features_data: [
+            {
+              sub_feature_id: Number,
+              access_permission: Boolean,
+              feature_access: [String, String, String, String], -> ["create", "read", "update", "delete"] -> "create-read-update-delete"
+            }
+          ]
+      }
+    ]
+    */
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Unauthorized",
+        new Error("Unauthorized"),
+        401,
+      );
+    }
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Employee Not Found",
+        new Error("Employee Not Found"),
+        404,
+      );
+    }
+
+    if (!Array.isArray(features_data) || features_data.length === 0) {
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Invalid Credentials",
+        new Error("Invalid Request"),
+        400,
+      );
+    }
+
+    for (const feature of features_data) {
+      const { feature_id, access_permission, sub_features_data } = feature;
+
+      if (!feature_id) {
+        return errorHandling(
+          connection,
+          res,
+          false,
+          "Invalid Feature Data",
+          new Error("Invalid Feature Data"),
+          400,
+        );
+      }
+
+      if (
+        !(await is_organization_contains_this_feature(
+          connection,
+          org_id,
+          feature_id,
+        ))
+      ) {
+        return errorHandling(
+          connection,
+          res,
+          false,
+          "Feature Not Found",
+          new Error("Feature Not Found"),
+          404,
+        );
+      }
+
+      const is_access_permission_valid = access_permission ? 1 : 0;
+      await connection.query(
+        `
+        INSERT INTO org_employee_feature_access
+        (employee_id, org_id, feature_id, access_permission)
+        VALUES (?, ?, ?, ?)
+        ON DUPLICATE KEY UPDATE access_permission = VALUES(access_permission)
+        `,
+        [employee_id, org_id, feature_id, is_access_permission_valid],
+      );
+
+      const subFeatures = Array.isArray(sub_features_data)
+        ? sub_features_data
+        : [];
+      for (const sub_feature of subFeatures) {
+        const {
+          sub_feature_id,
+          access_permission: sub_access_permission,
+          feature_access,
+        } = sub_feature;
+
+        if (!sub_feature_id) {
+          return errorHandling(
+            connection,
+            res,
+            false,
+            "Invalid Sub Feature Data",
+            new Error("Invalid Sub Feature Data"),
+            400,
+          );
+        }
+
+        if (
+          !(await is_organization_contains_this_sub_feature(
+            connection,
+            org_id,
+            sub_feature_id,
+            feature_id,
+          ))
+        ) {
+          return errorHandling(
+            connection,
+            res,
+            false,
+            "Sub Feature Not Found",
+            new Error("Sub Feature Not Found"),
+            404,
+          );
+        }
+
+        const is_sub_access_permission_valid =
+          sub_access_permission === undefined ||
+          sub_access_permission === null
+            ? 1
+            : sub_access_permission
+              ? 1
+              : 0;
+        const finalFeatureAccess = normalizeFeatureAccess(feature_access);
+
+        await connection.query(
+          `
+          INSERT INTO org_employee_sub_features_access
+          SET
+            employee_id = ?,
+            sub_feature_id = ?,
+            access_permission = ?,
+            feature_id = ?,
+            org_id = ?,
+            feature_access = ?
+          ON DUPLICATE KEY UPDATE
+            access_permission = VALUES(access_permission),
+            feature_access = VALUES(feature_access)
+          `,
+          [
+            employee_id,
+            sub_feature_id,
+            is_sub_access_permission_valid,
+            feature_id,
+            org_id,
+            finalFeatureAccess,
+          ],
+        );
+      }
+    }
+
+    await connection.commit();
+    return res.status(200).json({
+      success: true,
+      message: "Features And Sub Features Assigned To Employee Successfully",
+      data: null,
+    });
+  } catch (error) {
+    return errorHandling(
+      connection,
+      res,
+      false,
+      "Internal Server Error",
+      error,
+      500,
+    );
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};

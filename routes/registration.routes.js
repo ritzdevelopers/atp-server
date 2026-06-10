@@ -12,9 +12,13 @@ const router = Router();
 router.post("/user", user_register_controller);
 router.post("/organization", create_organization_controller);
 router.post("/add-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker, employee_feature_checker("manage-organization-information", "manage-organization-information", "add"), create_organization_address_controller);
+
+
 router.get("/get-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker,
     employee_feature_checker("manage-organization-information", "manage-organization-information", "read"),
     get_organization_address_controller);
+
+    
 router.put("/update-organization-address", user_validation_middleware, req_sender_auth, user_membership_checker,
     employee_feature_checker("manage-organization-information", "manage-organization-information", "update"),
     update_organization_address_controller);

@@ -18,6 +18,7 @@ import {
 } from "../controllers/organization.controller.js";
 import {
   assign__feature_access_to_the_employee,
+  assign_features_and_sub_features_to_the_employee,
   assign_features_to_employee_controller,
 } from "../controllers/organizations_features/features_managers.controller.js";
 
@@ -169,6 +170,15 @@ router.post(
   user_membership_checker,
   employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
   assign_features_to_employee_controller,
+);
+
+router.post(
+  "/assign-features-and-sub-features-to-the-employee",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employees-features-management", "assign-features-to-the-employee", "create"),
+  assign_features_and_sub_features_to_the_employee,
 );
 
 export default router;

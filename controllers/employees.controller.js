@@ -172,6 +172,28 @@ export const getEmployeesFullInformationController = async (req, res) => {
       `,
       [user.user_id, org_id]
     );
+    // Get All The Teams Of The Employee ::
+    const [teams] = await db.promise().query(`
+      SELECT 
+      assigned_teams.*,
+
+      team_details.team_name,
+      team_details.team_info,
+      team_details.total_number_of_members,
+      team_details.created_at,
+      
+      team_admin_name.user_name as team_admin_name
+
+      FROM team_members as assigned_teams
+      LEFT JOIN org_teams as team_details 
+          ON assigned_teams.team_id = team_details.id
+      LEFT JOIN apt_users as team_admin_name 
+          ON team_details.admin_id = team_admin_name.id
+       WHERE assigned_teams.org_id = ? AND assigned_teams.user_id = ?
+         AND assigned_teams.leave_date IS NULL
+      `, [org_id, user.user_id]);
+
+
     
     // 7. RESPONSE
     return res.status(200).json({
@@ -181,6 +203,7 @@ export const getEmployeesFullInformationController = async (req, res) => {
       employee: userInfo[0], 
       employee_leave_balances: employeeLeaveBalances,
       attendance_history: attendanceHistory,
+      teams: teams.length > 0 ? teams : [],
     });
 
   } catch (error) {

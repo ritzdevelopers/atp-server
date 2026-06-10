@@ -1313,25 +1313,54 @@ export const get_single_org_team_member_controller = async (req, res) => {
 
     // ---------------- GET USER TEAM ----------------
 
-    const [team] = await db.promise().query(
-      `
+    const requestedTeamId = req.query?.team_id;
+
+    let team_id;
+
+    if (requestedTeamId != null && String(requestedTeamId).trim() !== "") {
+      const [membership] = await db.promise().query(
+        `
         SELECT team_id
         FROM team_members
         WHERE user_id = ?
-        AND org_id = ?
-        AND leave_date IS NULL
+          AND org_id = ?
+          AND team_id = ?
+          AND leave_date IS NULL
         `,
-      [action_user_id, org_id],
-    );
+        [action_user_id, org_id, requestedTeamId],
+      );
 
-    if (team.length === 0) {
-      return res.status(404).json({
-        success: false,
-        message: "Member not found in any active team",
-      });
+      if (membership.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found in this team",
+        });
+      }
+
+      team_id = membership[0].team_id;
+    } else {
+      const [team] = await db.promise().query(
+        `
+        SELECT team_id
+        FROM team_members
+        WHERE user_id = ?
+          AND org_id = ?
+          AND leave_date IS NULL
+        ORDER BY joined_date ASC
+        LIMIT 1
+        `,
+        [action_user_id, org_id],
+      );
+
+      if (team.length === 0) {
+        return res.status(404).json({
+          success: false,
+          message: "Member not found in any active team",
+        });
+      }
+
+      team_id = team[0].team_id;
     }
-
-    const team_id = team[0].team_id;
 
     // ---------------- FETCH TEAM WITH MEMBERS (same shape as get-team/:id) ----------------
 
@@ -1374,6 +1403,13 @@ export const get_single_org_team_member_controller = async (req, res) => {
         LEFT JOIN team_members tm
           ON tm.team_id = ot.id
           AND tm.leave_date IS NULL
+          AND EXISTS (
+            SELECT 1
+            FROM apt_org_members aom
+            WHERE aom.user_id = tm.user_id
+              AND aom.org_id = ot.org_id
+              AND aom.is_active = 1
+          )
 
         LEFT JOIN apt_users au
           ON au.id = tm.user_id
@@ -1413,6 +1449,31 @@ export const get_single_org_team_member_controller = async (req, res) => {
       }
     }
 
+    // Fetch all the leave and attendance related queries of the employee inside the team ::
+    const [leave_queries] = await db.promise().query(`
+      SELECT leave_queries.*,
+  
+      leave_type.leave_type_name,
+      leave_approval.user_name as approved_by
+
+
+      FROM leave_quiry as leave_queries
+      LEFT JOIN leave_types as leave_type
+        ON leave_type.id = leave_queries.leave_type_id AND leave_type.org_id = leave_queries.org_id
+      LEFT JOIN apt_users as leave_approval
+        ON leave_approval.id = leave_queries.approved_by
+      WHERE leave_queries.user_id = ? AND leave_queries.org_id = ? AND leave_queries.team_id = ?
+      `, [action_user_id, org_id, team_id]);
+    
+    const [attendance_related_queries_records] = await db.promise().query(`
+      SELECT employee_attendance_queries.*
+
+      FROM attendance_related_queries as employee_attendance_queries
+
+      WHERE employee_attendance_queries.user_id = ? AND employee_attendance_queries.org_id = ? AND employee_attendance_queries.team_id = ?
+      `, [action_user_id, org_id, team_id]);
+
+
     const adminMembership = members.find(
       (m) => Number(m.user_id) === Number(head.admin_id),
     );
@@ -1434,6 +1495,8 @@ export const get_single_org_team_member_controller = async (req, res) => {
       is_admin: Number(head.admin_id) === Number(action_user_id),
 
       members,
+      my_leave_queries: leave_queries ?? [],
+      my_attendance_related_queries: attendance_related_queries_records ?? [],
     };
 
     return res.status(200).json({

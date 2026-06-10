@@ -830,3 +830,63 @@ CREATE TABLE dashboard_management (
 );
 
 ALTER TABLE holidays ADD COLUMN end_date date;
+
+
+
+CREATE TABLE previous_company_references (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    previous_company_name VARCHAR(255) NOT NULL,
+    company_email VARCHAR(255),
+
+    employee_code VARCHAR(100),
+    designation VARCHAR(150),
+
+    employment_start_date DATE,
+    employment_end_date DATE,
+
+    person_name VARCHAR(250) NOT NULL,
+
+    person_role ENUM(
+        'hr',
+        'reporting_manager'
+    ) NOT NULL,
+
+    person_contact_number1 VARCHAR(20) NOT NULL,
+    person_contact_number2 VARCHAR(20),
+
+    person_contact_email VARCHAR(255) NOT NULL,
+
+    verification_status ENUM(
+        'pending',
+        'in_progress',
+        'verified',
+        'failed',
+        'unable_to_contact'
+    ) DEFAULT 'pending',
+
+    verification_notes TEXT,
+
+    verification_by_id INT,
+    verification_by_name VARCHAR(250),
+
+    verified_at TIMESTAMP NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (employee_id)
+        REFERENCES apt_users(id),
+
+    FOREIGN KEY (org_id)
+        REFERENCES apt_organizations(id),
+
+    FOREIGN KEY (verification_by_id)
+        REFERENCES apt_users(id)
+);
+
+ALTER TABLE user_address ADD COLUMN address_type enum('current', 'permanent') not null;
