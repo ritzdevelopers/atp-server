@@ -890,3 +890,51 @@ CREATE TABLE previous_company_references (
 );
 
 ALTER TABLE user_address ADD COLUMN address_type enum('current', 'permanent') not null;
+
+CREATE TABLE employee_tasks(
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    employee_id INT NOT NULL,
+    org_id INT NOT NULL,
+    team_id INT,
+
+    assigned_by INT NOT NULL,
+    reporting_manager INT NOT NULL,
+
+    task_title VARCHAR(255) NOT NULL,
+    task_description TEXT,
+
+    task_priority ENUM(
+        'high',
+        'medium',
+        'low'
+    ) DEFAULT 'medium',
+
+    task_status ENUM(
+        'pending',
+        'in-progress',
+        'delay',
+        'completed'
+    ) DEFAULT 'pending',
+
+    complete_status ENUM(
+        'pending',
+        'approved',
+        'rejected'
+    ) DEFAULT 'pending',
+
+    task_start_date DATETIME,
+    task_deadline DATETIME,
+
+    employee_completed_at DATETIME,
+    manager_remarks TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (employee_id) REFERENCES apt_users(id),
+    FOREIGN KEY (org_id) REFERENCES apt_organizations(id),
+    FOREIGN KEY (team_id) REFERENCES org_teams(id),
+    FOREIGN KEY (assigned_by) REFERENCES apt_users(id),
+    FOREIGN KEY (reporting_manager) REFERENCES apt_users(id)
+);
