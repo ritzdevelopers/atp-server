@@ -15,6 +15,8 @@ import {
   create_user_background_verification_controller,
   update_user_reference_controller,
   update_employee_background_verification_status_controller,
+  get_all_user_references_controller,
+  get_single_user_reference_controller,
 } from "../controllers/user.controller.js";
 import user_validation_middleware from "../middlewares/user_validation_middleware.js"; 
 import {
@@ -264,7 +266,7 @@ router.post(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
-  employee_feature_checker("employee-management", "manage-employee", "create"),
+  employee_feature_checker("employee-management", "background-verification", "create"),
   create_user_background_verification_controller,
 );
 
@@ -273,7 +275,7 @@ router.patch(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
-  employee_feature_checker("employee-management", "manage-employee", "update"),
+  employee_feature_checker("employee-management", "background-verification", "update"),
   update_user_reference_controller,
 );
 
@@ -282,8 +284,26 @@ router.patch(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
-  employee_feature_checker("employee-management", "manage-employee", "update"),
+  employee_feature_checker("employee-management", "background-verification", "update"),
   update_employee_background_verification_status_controller,
+);
+
+router.get(
+  "/get-all-user-background-verifications",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employee-management", "background-verification", "read"),
+  get_all_user_references_controller,
+);
+
+router.get(
+  "/get-user-background-verification/:employee_id/:reference_id",
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+  employee_feature_checker("employee-management", "background-verification", "read"),
+  get_single_user_reference_controller,
 );
 
 export default router;

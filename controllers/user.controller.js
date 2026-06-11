@@ -2486,7 +2486,7 @@ export const assign_ip_address_to_user_controller = async (req, res) => {
       "SELECT id FROM apt_users WHERE id = ?",
       [employee_id],
     );
-
+    console.log("employeeResult", employeeResult);
     if (employeeResult.length === 0) {
       await connection.rollback();
       return res.status(404).json({
@@ -4494,23 +4494,6 @@ export const update_user_reference_controller = async (req, res) => {
     }
 
     const existing = existingRows[0];
-    const shouldResetVerification = existing.verification_status !== "pending";
-
-    const nextVerificationStatus = shouldResetVerification
-      ? "pending"
-      : existing.verification_status;
-    const nextVerificationNotes = shouldResetVerification
-      ? null
-      : existing.verification_notes;
-    const nextVerificationById = shouldResetVerification
-      ? null
-      : existing.verification_by_id;
-    const nextVerificationByName = shouldResetVerification
-      ? null
-      : existing.verification_by_name;
-    const nextVerifiedAt = shouldResetVerification
-      ? null
-      : existing.verified_at;
 
     const [updateResult] = await connection.query(
       `UPDATE previous_company_references SET
@@ -4524,12 +4507,7 @@ export const update_user_reference_controller = async (req, res) => {
         person_role = ?,
         person_contact_number1 = ?,
         person_contact_number2 = ?,
-        person_contact_email = ?,
-        verification_status = ?,
-        verification_notes = ?,
-        verification_by_id = ?,
-        verification_by_name = ?,
-        verified_at = ?
+        person_contact_email = ?
       WHERE id = ? AND employee_id = ? AND org_id = ?`,
       [
         patch.previous_company_name,
@@ -4543,11 +4521,6 @@ export const update_user_reference_controller = async (req, res) => {
         patch.person_contact_number1,
         patch.person_contact_number2,
         patch.person_contact_email,
-        nextVerificationStatus,
-        nextVerificationNotes,
-        nextVerificationById,
-        nextVerificationByName,
-        nextVerifiedAt,
         reference_id,
         employee_id,
         org_id,
@@ -4602,9 +4575,7 @@ export const update_user_reference_controller = async (req, res) => {
         "UPDATE_PREVIOUS_COMPANY_REFERENCE",
         JSON.stringify(existing),
         JSON.stringify(updatedReference),
-        shouldResetVerification
-          ? "Previous company reference updated; verification reset to pending"
-          : "Previous company reference updated",
+        "Previous company reference updated",
       ],
     );
 
@@ -4625,7 +4596,6 @@ export const update_user_reference_controller = async (req, res) => {
         employee_id: Number(employee_id),
         org_id: Number(org_id),
         reference: updatedReference,
-        verification_reset: shouldResetVerification,
       },
     });
   } catch (error) {
@@ -4918,65 +4888,183 @@ export const get_all_user_references_controller = async (req, res) => {
   try {
     const { user_id: action_user_id } = req.user;
     const { org_id } = req;
-    const { status, limit, joining_date } = req.query;
+    const {
+      status,
+      limit,
+      joining_date,
+      employee_name,
+      previous_company_name,
+      person_role,
+      is_ascending,
+      employee_id,
+    } = req.query;
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
 
     if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
-      return errorHandling(connection, res, "Action user not found", 404);
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Action user not found",
+      });
     }
-    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
-      return errorHandling(connection, res, "Employee not found", 404);
-    }
-    const query = `
+
+    let query = `
     SELECT pcr.*,
-    
     employee.user_name as employee_name,
-
     verificator.user_name as verificator_name,
-    
     membership_info.created_at as member_since
-
     FROM previous_company_references as pcr
-
     LEFT JOIN apt_users as employee
       ON pcr.employee_id = employee.id
-
     LEFT JOIN apt_users as verificator
       ON pcr.verification_by_id = verificator.id
-    
     LEFT JOIN apt_org_members as membership_info
       ON employee.id = membership_info.user_id
       AND membership_info.org_id = pcr.org_id
-
     WHERE pcr.org_id = ?
     `;
     const params = [org_id];
+
     if (status) {
-      query += `AND pcr.verification_status = ?`;
-      params.push(status);
+      const normalizedStatus = normalizeVerificationStatus(status);
+      if (!normalizedStatus) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `status must be one of: ${VERIFICATION_STATUS_VALUES.join(", ")}`,
+        });
+      }
+      query += ` AND pcr.verification_status = ?`;
+      params.push(normalizedStatus);
     }
-    if (limit) {
-      query += `LIMIT ?`;
-      params.push(limit);
+
+    if (person_role) {
+      const normalizedRole = String(person_role).trim().toLowerCase();
+      if (!PERSON_ROLE_VALUES.includes(normalizedRole)) {
+        await connection.rollback();
+        return res.status(400).json({
+          success: false,
+          message: `person_role must be one of: ${PERSON_ROLE_VALUES.join(", ")}`,
+        });
+      }
+      query += ` AND pcr.person_role = ?`;
+      params.push(normalizedRole);
     }
+
+    if (employee_name && String(employee_name).trim()) {
+      query += ` AND employee.user_name LIKE ?`;
+      params.push(`%${String(employee_name).trim()}%`);
+    }
+
+    if (previous_company_name && String(previous_company_name).trim()) {
+      query += ` AND pcr.previous_company_name LIKE ?`;
+      params.push(`%${String(previous_company_name).trim()}%`);
+    }
+
+    if (employee_id && String(employee_id).trim()) {
+      query += ` AND pcr.employee_id = ?`;
+      params.push(Number(employee_id));
+    }
+
     if (joining_date) {
-      query += `AND employee.created_at = ?`;
+      query += ` AND DATE(membership_info.created_at) = ?`;
       params.push(joining_date);
     }
-    const [results] = await connection.query(query, params);
-    if (results.affectedRows === 0) {
-      return errorHandling(connection, res, "No references found", 404);
+
+    const sortDir =
+      String(is_ascending || "DESC").toUpperCase() === "ASC" ? "ASC" : "DESC";
+    query += ` ORDER BY pcr.created_at ${sortDir}`;
+
+    if (limit) {
+      const parsedLimit = Math.min(Math.max(parseInt(limit, 10) || 50, 1), 500);
+      query += ` LIMIT ?`;
+      params.push(parsedLimit);
     }
+
+    const [results] = await connection.query(query, params);
+    await connection.commit();
+
+    const groupedMap = new Map();
+
+    for (const row of results) {
+      const empId = Number(row.employee_id);
+      if (!Number.isFinite(empId)) continue;
+
+      if (!groupedMap.has(empId)) {
+        groupedMap.set(empId, {
+          id: empId,
+          employee_id: empId,
+          org_id: row.org_id,
+          created_at: row.created_at,
+          updated_at: row.updated_at,
+          employee_name: row.employee_name ?? null,
+          member_since: row.member_since ?? null,
+          references: [],
+        });
+      }
+
+      const group = groupedMap.get(empId);
+
+      if (
+        row.created_at &&
+        (!group.created_at || new Date(row.created_at) < new Date(group.created_at))
+      ) {
+        group.created_at = row.created_at;
+      }
+      if (
+        row.updated_at &&
+        (!group.updated_at || new Date(row.updated_at) > new Date(group.updated_at))
+      ) {
+        group.updated_at = row.updated_at;
+      }
+
+      group.references.push({
+        id: row.id,
+        previous_company_name: row.previous_company_name,
+        company_email: row.company_email ?? null,
+        employee_code: row.employee_code ?? null,
+        designation: row.designation ?? null,
+        employment_start_date: row.employment_start_date ?? null,
+        employment_end_date: row.employment_end_date ?? null,
+        person_name: row.person_name,
+        person_role: row.person_role,
+        person_contact_number1: row.person_contact_number1,
+        person_contact_number2: row.person_contact_number2 ?? null,
+        person_contact_email: row.person_contact_email,
+        verification_status: row.verification_status,
+        verification_notes: row.verification_notes ?? null,
+        verification_by_id: row.verification_by_id ?? null,
+        verification_by_name: row.verification_by_name ?? null,
+        verified_at: row.verified_at ?? null,
+        verificator_name: row.verificator_name ?? null,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+      });
+    }
+
+    const groupedData = Array.from(groupedMap.values()).map((group) => ({
+      ...group,
+      total_references_count: group.references.length,
+    }));
+
+    groupedData.sort((a, b) => {
+      const aTime = a.updated_at ? new Date(a.updated_at).getTime() : 0;
+      const bTime = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+      return sortDir === "ASC" ? aTime - bTime : bTime - aTime;
+    });
+
     return res.status(200).json({
       success: true,
-      message: "References fetched successfully",
-      data: results,
+      message: groupedData.length
+        ? "References fetched successfully"
+        : "No references found",
+      data: groupedData,
     });
   } catch (error) {
     console.error("get_all_user_references_controller:", error);
     if (connection) {
-      return errorHandling(connection, res, "Internal server error", 500);
+      await connection.rollback();
     }
     return res.status(500).json({
       success: false,
@@ -4990,56 +5078,69 @@ export const get_all_user_references_controller = async (req, res) => {
 export const get_single_user_reference_controller = async (req, res) => {
   let connection;
   try {
-    connection = await pool.promise().getConnection();
-    await connection.beginTransaction();
+    const { user_id: action_user_id } = req.user;
     const { org_id } = req;
     const { employee_id, reference_id } = req.params;
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Action user not found",
+      });
+    }
+
     if (!(await isEmployeeExists(connection, employee_id, org_id))) {
-      return errorHandling(connection, res, "Employee not found", 404);
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
     }
-    if (!(await isEmployeeExists(connection, reference_id, org_id))) {
-      return errorHandling(connection, res, "Reference not found", 404);
-    }
+
     const query = `
     SELECT pcr.*,
-    
     employee.user_name as employee_name,
     employee.user_email as employee_email,
     employee.user_phone as employee_phone,
     employee.created_at as employee_joining_date,
     employee.user_image as employee_image,
     employee.id as employee_id,
-    
     verificator.user_name as verificator_name,
     verificator.user_email as verificator_email,
     verificator.user_phone as verificator_phone,
     verificator.created_at as verificator_joining_date,
     verificator.user_image as verificator_image,
     verificator.id as verificator_id,
-    
     membership_info.created_at as member_since
-    
     FROM previous_company_references as pcr
-    
     LEFT JOIN apt_users as employee
       ON pcr.employee_id = employee.id
-    
     LEFT JOIN apt_users as verificator
       ON pcr.verification_by_id = verificator.id
-    
     LEFT JOIN apt_org_members as membership_info
       ON employee.id = membership_info.user_id
       AND membership_info.org_id = pcr.org_id
-    
     WHERE pcr.org_id = ?
     AND pcr.employee_id = ?
     AND pcr.id = ?
     `;
     const params = [org_id, employee_id, reference_id];
     const [results] = await connection.query(query, params);
-    if(results.affectedRows === 0) {
-      return errorHandling(connection, res, "Reference not found", 404);
+
+    if (!results.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Reference not found",
+      });
     }
+
+    await connection.commit();
+
     return res.status(200).json({
       success: true,
       message: "Reference fetched successfully",
@@ -5048,7 +5149,7 @@ export const get_single_user_reference_controller = async (req, res) => {
   } catch (error) {
     console.error("get_single_user_reference_controller:", error);
     if (connection) {
-      return errorHandling(connection, res, "Internal server error", 500);
+      await connection.rollback();
     }
     return res.status(500).json({
       success: false,

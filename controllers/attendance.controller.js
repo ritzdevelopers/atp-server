@@ -1495,6 +1495,76 @@ export const userUnassignShiftController = async (req, res) => {
   }
 };
 
+export const getUserShiftsController = async (req, res) => {
+  let connection;
+  try {
+    const { org_id } = req;
+    const employee_id = req.query.employee_id ?? req.params.employee_id;
+
+    if (!org_id) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id is required",
+      });
+    }
+
+    if (!employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: "employee_id is required",
+      });
+    }
+
+    connection = await db.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Employee is not part of this organization",
+      });
+    }
+
+    const [assignments] = await connection.query(
+      "SELECT shift_id FROM user_shifts WHERE org_id = ? AND user_id = ?",
+      [org_id, employee_id],
+    );
+
+    if (assignments.length === 0) {
+      await connection.commit();
+      return res.status(200).json({
+        success: true,
+        message: "Employee is not assigned to any shift",
+        data: [],
+      });
+    }
+
+    const shift_ids = assignments.map((row) => row.shift_id);
+    const [shiftsData] = await connection.query(
+      "SELECT * FROM shifts WHERE org_id = ? AND id IN (?)",
+      [org_id, shift_ids],
+    );
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Shifts fetched successfully",
+      data: shiftsData,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    console.error("getUserShiftsController:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+    });
+  } finally {
+    if (connection) connection.release();
+  }
+};
+
 // Company IP Address
 export const addCompanyIPAddressController = async (req, res) => {
   let connection;
