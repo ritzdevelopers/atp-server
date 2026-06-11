@@ -21,7 +21,6 @@ import {
 import { assign_ip_address_to_user_controller, unassign_ip_address_from_user_controller } from "../controllers/user.controller.js";
 import req_sender_auth from "../middlewares/req_sender_auth.js";
 import user_membership_checker from "../middlewares/user_membership_checker.js";
-import user_feature_access_checker from "../middlewares/user_feature_access_checker.js";
 import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 const router = Router();
 
