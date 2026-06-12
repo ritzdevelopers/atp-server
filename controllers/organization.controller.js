@@ -826,11 +826,12 @@ export const get_all_employees_with_accessible_features_and_sub_features_info_co
         WHERE om.org_id = ?
           AND om.is_active = 1
           AND u.id <> org.owner_id
+          AND u.id <> ?
           AND (f.id IS NULL OR ofa.feature_id IS NOT NULL)
           AND (sf.id IS NULL OR osfa.sub_feature_id IS NOT NULL)
         ORDER BY u.id ASC, f.id ASC, sf.id ASC
         `,
-        [org_id],
+        [org_id, user_id],
       );
 
       const employeeMap = {};

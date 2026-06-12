@@ -2069,7 +2069,7 @@ export const addHolidayController = async (req, res) => {
 
     // 4. Activity Log
     await connection.query(
-      `INSERT INTO management_activity_log 
+      `INSERT INTO management_activity_log
       (org_id, activity_type, activity_overview, performed_by, performed_by_name)
       VALUES (?, ?, ?, ?, ?)`,
       [
@@ -2350,12 +2350,6 @@ function addCalendarDays(ymdStr, deltaDays) {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Paid leave units taken from monthly `leave_balance` (INT counts).
- * - full_day: 1 unit per calendar day in range (inclusive).
- * - half_day: 1 unit in the month of start_date.
- * - short_leave: 0 units (approval does not reduce paid quota).
- */
 function computePaidLeaveUnitsByMonth(leave_type, rawStart, rawEnd) {
   const startStr = toYmd(rawStart);
   if (!startStr) return [];
