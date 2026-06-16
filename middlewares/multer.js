@@ -8,6 +8,7 @@ const fileFilter = (req, file, cb) => {
     "image/png",
     "image/jpeg",
     "image/jpg",
+    "image/webp",
     "application/pdf"
   ];
 
