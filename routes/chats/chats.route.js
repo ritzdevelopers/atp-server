@@ -1,0 +1,53 @@
+import { Router } from "express";
+import {
+  create_new_group,
+  get_all_groups_where_i_am_participant,
+  get_my_group_chat,
+  edit_group_information,
+  add_new_members_to_group,
+  add_new_group_admin,
+  remove_group_admin,
+  remove_members_from_group,
+  inactive_group,
+} from "../../controllers/chats/group/group_chat.controller.js";
+
+const router = Router();
+
+// Get My All Chats ::
+
+// Get My Single Chat ::
+
+// Edit Chat Content ::
+
+// Delete Chat ::
+
+// ****************************************************************//
+
+// Create New Group ::
+router.post("/create-new-group", create_new_group); 
+
+// Get All Groups Where I am Participant ::
+router.get("/get-all-groups", get_all_groups_where_i_am_participant);
+
+// Get Single Chat Of Group ::
+router.get("/get-my-group-chat/:group_id", get_my_group_chat);
+
+// Edit Group Information *Patch ::
+router.patch("/edit-group-information/:group_id", edit_group_information);
+
+// Add New Members To Group ::
+router.post("/add-new-members-to-group/:group_id", add_new_members_to_group);
+
+// Add / Remove Group Admin ::
+router.post("/add-new-group-admin/:group_id", add_new_group_admin);
+router.delete("/remove-group-admin/:group_id", remove_group_admin);
+
+// Remove Members From Group ::
+router.delete("/remove-members-from-group/:group_id", remove_members_from_group);
+
+// Activate / Deactivate Group ::
+router.patch("/inactive-group/:group_id", inactive_group);
+
+// Delete Group ::
+router.patch("/inactive-group/:group_id", inactive_group);
+export default router;

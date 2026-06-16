@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 import authRoutes from "./routes/admin.auth.routes.js";
-import userRoutes from "./routes/admin.controlled.routes.js"; 
+import userRoutes from "./routes/admin.controlled.routes.js";
 import userRolesRoutes from "./routes/user.roles.route.js";
 import registrationRoutes from "./routes/registration.routes.js";
 import attendanceRoutes from "./routes/attendance.routes.js";
@@ -24,9 +24,16 @@ import { ensureLeaveQuirySchema } from "./db/ensureLeaveQuirySchema.js";
 import subFeatureRoutes from "./routes/super_admin/route.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import taskManagemenRoutes from "./routes/tasks/taskManagement.route.js";
+import chatApplicationRoutes from "./routes/chats/chats.route.js";
+
+import { Server } from "socket.io";
+import { createServer } from "http";
+import { register_socket_io } from "./sockets/socker.io.js";
+
 dotenv.config();
 
 const app = express();
+const socket_server = createServer(app);
 
 const allowedOrigins = [
   "http://localhost:3000",
@@ -36,6 +43,13 @@ const allowedOrigins = [
   "http://localhost",
   "https://localhost",
 ];
+const io = new Server(socket_server, {
+  cors: {
+    origin: allowedOrigins,
+  },
+});
+register_socket_io(io);
+
 
 app.use(
   cors({
@@ -60,8 +74,6 @@ app.use("/api/register", registrationRoutes);
 
 // Authentication Routes
 app.use("/api/auth", authRoutes);
-
-
 
 // User CRUD Operations Routes :: It Will Be Used By Admin Only And HR
 app.use("/api/user", userRoutes);
@@ -123,8 +135,10 @@ app.use("/api/task-management", taskManagemenRoutes);
 app.use("/api/dashboard-management", dashboardRoutes);
 
 
+// Chat Application Routes ::
+app.use("/api/chat-application", chatApplicationRoutes);
 
-app.listen(3000, async () => {
+socket_server.listen(3000, async () => {
   try {
     await ensureLeaveQuirySchema();
   } catch (err) {

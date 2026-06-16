@@ -8,7 +8,7 @@ const fileFilter = (req, file, cb) => {
     "image/png",
     "image/jpeg",
     "image/jpg",
-    "image/webp",
+    "image/webp", // Remove After Testing
     "application/pdf"
   ];
 
