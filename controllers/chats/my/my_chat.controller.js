@@ -91,9 +91,32 @@ function normalizeReplyTo(replyToDoc, usersMap) {
   return { _id: replyToDoc };
 }
 
-function normalizePrivateMessage(message, actionUserId, usersMap) {
+function normalizePrivateMessage(
+  message,
+  actionUserId,
+  usersMap,
+  options = {},
+) {
+  const { seenByViewerOnly = false } = options;
   const sender = usersMap.get(Number(message.sender));
   if (!sender) return null;
+
+  const actionId = Number(actionUserId);
+  const rawSeenBy = (message.seen_by ?? []).map(Number);
+  const isOwnMessage = Number(message.sender) === actionId;
+  const seenByForResponse = seenByViewerOnly
+    ? isOwnMessage
+      ? (message.delivered_to ?? [])
+          .map(Number)
+          .filter((userId) => rawSeenBy.includes(userId))
+          .map((userId) => usersMap.get(userId))
+          .filter(Boolean)
+      : rawSeenBy.includes(actionId)
+        ? [usersMap.get(actionId)].filter(Boolean)
+        : []
+    : rawSeenBy
+        .map((userId) => usersMap.get(userId))
+        .filter(Boolean);
 
   return {
     _id: message._id,
@@ -105,13 +128,11 @@ function normalizePrivateMessage(message, actionUserId, usersMap) {
     delivered_to: (message.delivered_to ?? [])
       .map((userId) => usersMap.get(Number(userId)))
       .filter(Boolean),
-    seen_by: (message.seen_by ?? [])
-      .map((userId) => usersMap.get(Number(userId)))
-      .filter(Boolean),
+    seen_by: seenByForResponse,
     is_edited: Boolean(message.is_edited),
     edited_at: message.edited_at ?? null,
     created_at: message.createdAt ?? message.created_at ?? null,
-    sent_by_me: Number(message.sender) === Number(actionUserId),
+    sent_by_me: Number(message.sender) === actionId,
   };
 }
 
@@ -350,6 +371,27 @@ export const get_my_single_chat = async (req, res) => {
       .skip(skip)
       .limit(limit);
 
+    // Mark incoming messages as seen by the requesting user before building the response.
+    await Message.updateMany(
+      {
+        company_id,
+        chat_id,
+        is_deleted: false,
+        sender: { $ne: actionId },
+      },
+      {
+        $addToSet: { seen_by: actionId },
+      },
+    );
+
+    for (const message of messages) {
+      if (Number(message.sender) === actionId) continue;
+      const seenBy = (message.seen_by ?? []).map(Number);
+      if (!seenBy.includes(actionId)) {
+        message.seen_by = [...seenBy, actionId];
+      }
+    }
+
     const relatedUserIds = new Set([actionId]);
     if (otherParticipantId != null) {
       relatedUserIds.add(Number(otherParticipantId));
@@ -358,9 +400,6 @@ export const get_my_single_chat = async (req, res) => {
     for (const message of messages) {
       relatedUserIds.add(Number(message.sender));
       for (const userId of message.delivered_to ?? []) {
-        relatedUserIds.add(Number(userId));
-      }
-      for (const userId of message.seen_by ?? []) {
         relatedUserIds.add(Number(userId));
       }
       if (message.reply_to?.sender) {
@@ -385,7 +424,9 @@ export const get_my_single_chat = async (req, res) => {
 
     const normalized_messages = [];
     for (const message of messages) {
-      const normalized = normalizePrivateMessage(message, actionId, usersMap);
+      const normalized = normalizePrivateMessage(message, actionId, usersMap, {
+        seenByViewerOnly: true,
+      });
       if (normalized) normalized_messages.push(normalized);
     }
 
