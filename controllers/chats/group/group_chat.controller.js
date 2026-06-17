@@ -1660,6 +1660,8 @@ export const inactive_group = async (req, res) => {
     }
   }
 };
+
+
 export const get_org_users_for_chat = async (req, res) => {
   try {
     const { org_id: company_id } = req;
