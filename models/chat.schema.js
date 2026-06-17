@@ -43,6 +43,7 @@ const chat_schema = new Schema(
       type: Boolean,
       default: true,
     },
+    
     participants: [
       {
         type: Number,

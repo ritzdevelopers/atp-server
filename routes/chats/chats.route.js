@@ -11,7 +11,7 @@ import {
   inactive_group,
   get_org_users_for_chat,
 } from "../../controllers/chats/group/group_chat.controller.js";
-import { get_my_all_chats } from "../../controllers/chats/my/my_chat.controller.js";
+import { get_my_all_chats, get_my_single_chat } from "../../controllers/chats/my/my_chat.controller.js";
 import user_validation_middleware from "../../middlewares/user_validation_middleware.js";
 import req_sender_auth from "../../middlewares/req_sender_auth.js";
 import user_membership_checker from "../../middlewares/user_membership_checker.js";
@@ -29,6 +29,7 @@ router.get("/get-org-users-for-chat", get_org_users_for_chat);
 
 // Individual private chats
 router.get("/get-my-all-chats", get_my_all_chats);
+router.get("/get-my-single-chat/:chat_id", get_my_single_chat);
 
 // Create New Group
 router.post("/create-new-group", create_new_group);
