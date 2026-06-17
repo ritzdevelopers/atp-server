@@ -20,8 +20,7 @@ export const send_private_message_controller = async (io, socket, data) => {
     const message = await save_private_message_service(data);
 
     socket.emit("receive_private_message", message);
-    io.to(String(delivered_to)).emit("receive_private_message", message);
-
+    io.to(`user:${delivered_to}`).emit("receive_private_message", message);
   } catch (error) {
     return socket.emit("error", {
       success: false,
