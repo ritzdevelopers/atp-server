@@ -9,45 +9,46 @@ import {
   remove_group_admin,
   remove_members_from_group,
   inactive_group,
+  get_org_users_for_chat,
 } from "../../controllers/chats/group/group_chat.controller.js";
+import user_validation_middleware from "../../middlewares/user_validation_middleware.js";
+import req_sender_auth from "../../middlewares/req_sender_auth.js";
+import user_membership_checker from "../../middlewares/user_membership_checker.js";
 
 const router = Router();
 
-// Get My All Chats ::
+router.use(
+  user_validation_middleware,
+  req_sender_auth,
+  user_membership_checker,
+);
 
-// Get My Single Chat ::
+// Org users for chat (name, email, profile only)
+router.get("/get-org-users-for-chat", get_org_users_for_chat);
 
-// Edit Chat Content ::
+// Create New Group
+router.post("/create-new-group", create_new_group);
 
-// Delete Chat ::
-
-// ****************************************************************//
-
-// Create New Group ::
-router.post("/create-new-group", create_new_group); 
-
-// Get All Groups Where I am Participant ::
+// Get All Groups Where I am Participant
 router.get("/get-all-groups", get_all_groups_where_i_am_participant);
 
-// Get Single Chat Of Group ::
+// Get Single Chat Of Group
 router.get("/get-my-group-chat/:group_id", get_my_group_chat);
 
-// Edit Group Information *Patch ::
+// Edit Group Information *Patch
 router.patch("/edit-group-information/:group_id", edit_group_information);
 
-// Add New Members To Group ::
+// Add New Members To Group
 router.post("/add-new-members-to-group/:group_id", add_new_members_to_group);
 
-// Add / Remove Group Admin ::
+// Add / Remove Group Admin
 router.post("/add-new-group-admin/:group_id", add_new_group_admin);
 router.delete("/remove-group-admin/:group_id", remove_group_admin);
 
-// Remove Members From Group ::
+// Remove Members From Group
 router.delete("/remove-members-from-group/:group_id", remove_members_from_group);
 
-// Activate / Deactivate Group ::
+// Activate / Deactivate Group
 router.patch("/inactive-group/:group_id", inactive_group);
 
-// Delete Group ::
-router.patch("/inactive-group/:group_id", inactive_group);
 export default router;

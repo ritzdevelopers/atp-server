@@ -29,6 +29,7 @@ import chatApplicationRoutes from "./routes/chats/chats.route.js";
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { register_socket_io } from "./sockets/socker.io.js";
+import connectMongo from "./db/connect_mongo.js";
 
 dotenv.config();
 
@@ -141,6 +142,7 @@ app.use("/api/chat-application", chatApplicationRoutes);
 socket_server.listen(3000, async () => {
   try {
     await ensureLeaveQuirySchema();
+    await connectMongo();
   } catch (err) {
     console.error("[schema] leave_quiry migration failed:", err.message);
   }

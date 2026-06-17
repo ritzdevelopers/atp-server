@@ -112,7 +112,7 @@ async function logGroupActivity(
   overview,
   activityType,
 ) {
-  const [user] = await getEmployeeName(connection, actionUserId, companyId);
+  const user = await getEmployeeName(connection, actionUserId, companyId);
   if (!user.success) {
     return { ok: false, status: 404, message: "User Not Found" };
   }
@@ -278,7 +278,7 @@ export const create_new_group = async (req, res) => {
     }
 
     // Get User Name
-    const [user] = await getEmployeeName(
+    const user = await getEmployeeName(
       connection,
       action_user_id,
       company_id,
@@ -376,6 +376,7 @@ export const get_all_groups_where_i_am_participant = async (req, res) => {
         404,
       );
     }
+
     // Fetch Groups Where I Am Participant
     const groups = await Chat.find({
       company_id,
@@ -737,7 +738,7 @@ export const edit_group_information = async (req, res) => {
       });
     }
 
-    const [user] = await getEmployeeName(
+    const user = await getEmployeeName(
       connection,
       action_user_id,
       company_id,
@@ -1659,3 +1660,50 @@ export const inactive_group = async (req, res) => {
     }
   }
 };
+export const get_org_users_for_chat = async (req, res) => {
+  try {
+    const { org_id: company_id } = req;
+
+    if (!company_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Organization is required",
+      });
+    }
+
+    const [rows] = await pool.promise().query(
+      `
+      SELECT
+        apt_users.id AS user_id,
+        apt_users.user_name,
+        apt_users.user_email,
+        apt_users.user_image
+      FROM apt_org_members
+      INNER JOIN apt_users ON apt_users.id = apt_org_members.user_id
+      WHERE apt_org_members.org_id = ?
+        AND apt_org_members.is_active = 1
+      ORDER BY apt_users.user_name ASC
+      `,
+      [company_id],
+    );
+
+    return res.status(200).json({
+      success: true,
+      message: "Users fetched successfully",
+      data: (rows ?? []).map((row) => ({
+        user_id: row.user_id,
+        user_name: row.user_name,
+        user_email: row.user_email,
+        user_profile: row.user_image || null,
+      })),
+    });
+  } catch (error) {
+    console.error("get_org_users_for_chat:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  }
+};
+

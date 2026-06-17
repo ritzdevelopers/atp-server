@@ -99,6 +99,7 @@ pool.on("error", (err) => {
   console.error("[mysql pool] pool error:", err.code || err.errno, err.message);
 });
 
+
 let underlyingConn = null;
 let reconnectTimer = null;
 
@@ -107,7 +108,7 @@ function connectUnderlying(callback) {
     if (err) {
       console.error("[mysql] connect error:", err.message);
     } else {
-      console.log("Connected to database ✅");
+      // console.log("Connected to database ✅");
     }
     if (typeof callback === "function") callback(err);
   });
