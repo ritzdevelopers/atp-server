@@ -476,4 +476,173 @@ export const get_my_single_chat = async (req, res) => {
   }
 };
 
-// Create New Chat ::
+// Delete My Messages ::
+export const delete_my_messages = async (req, res) => {
+  let connection;
+
+  try {
+    const { user_id: action_user_id } = req.user;
+    const { org_id: company_id } = req;
+    const { chat_id } = req.params;
+    const { message_ids } = req.body;
+    const actionId = Number(action_user_id);
+
+    if (!chat_id || !company_id || !action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Chat Id Is Required",
+        error: "Chat Id Is Required",
+      });
+    }
+
+    if (!isValidObjectId(chat_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Chat Id",
+        error: "Invalid Chat Id",
+      });
+    }
+
+    if (!Array.isArray(message_ids) || message_ids.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Message IDs array is required",
+        error: "Message IDs array is required",
+      });
+    }
+
+    const uniqueMessageIds = [
+      ...new Set(
+        message_ids
+          .filter((id) => id != null && id !== "")
+          .map((id) => String(id)),
+      ),
+    ];
+
+    if (uniqueMessageIds.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Message IDs array is required",
+        error: "Message IDs array is required",
+      });
+    }
+
+    const invalidMessageId = uniqueMessageIds.find((id) => !isValidObjectId(id));
+    if (invalidMessageId) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Message Id",
+        error: `Invalid Message Id: ${invalidMessageId}`,
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    if (!(await isEmployeeExists(connection, action_user_id, company_id))) {
+      await connection.rollback();
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Employee Not Found",
+        new Error("Employee Not Found"),
+        404,
+      );
+    }
+
+    const chat = await Chat.findOne({
+      _id: chat_id,
+      company_id,
+      chat_type: "private",
+      participants: { $in: [actionId] },
+    });
+
+    if (!chat) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "Chat Not Found",
+        error: "Chat Not Found",
+      });
+    }
+
+    const messages = await Message.find({
+      _id: { $in: uniqueMessageIds },
+      company_id,
+      chat_id,
+      sender: actionId,
+      is_deleted: false,
+    }).select("_id");
+
+    if (!messages.length) {
+      await connection.rollback();
+      return res.status(404).json({
+        success: false,
+        message: "No Messages Found To Delete",
+        error: "No Messages Found To Delete",
+      });
+    }
+
+    const deletableIds = messages.map((message) => message._id);
+    const deletedAt = new Date();
+
+    await Message.updateMany(
+      { _id: { $in: deletableIds } },
+      {
+        $set: {
+          is_deleted: true,
+          deleted_at: deletedAt,
+        },
+      },
+    );
+
+    const latestMessage = await Message.findOne({
+      company_id,
+      chat_id,
+      is_deleted: false,
+    })
+      .sort({ createdAt: -1 })
+      .select("_id createdAt");
+
+    await Chat.findByIdAndUpdate(chat_id, {
+      last_message: latestMessage?._id ?? null,
+      last_message_time:
+        latestMessage?.createdAt ?? chat.createdAt ?? deletedAt,
+    });
+
+    await connection.commit();
+
+    return res.status(200).json({
+      success: true,
+      message: "Messages Deleted Successfully",
+      data: {
+        chat_id,
+        deleted_message_ids: deletableIds.map((id) => String(id)),
+        deleted_count: deletableIds.length,
+      },
+    });
+  } catch (error) {
+    console.error(error);
+    if (connection) {
+      await connection.rollback();
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "Internal Server Error",
+        new Error("Internal Server Error"),
+        500,
+      );
+    }
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
