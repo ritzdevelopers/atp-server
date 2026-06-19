@@ -299,10 +299,14 @@ export const get_all_users_with_attendance_history = async (req, res) => {
     const statusFilter = String(status || "").trim().toLowerCase();
 
     const [totalRows] = await db.promise().query(
-      `SELECT COUNT(*) AS total FROM apt_org_members WHERE org_id = ? AND is_active = 1`,
+      `SELECT
+        SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_total,
+        SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
+      FROM apt_org_members WHERE org_id = ?`,
       [org_id],
     );
-    const totalCompanyEmployees = Number(totalRows[0]?.total || 0);
+    const totalCompanyEmployees = Number(totalRows[0]?.active_total || 0);
+    const inactiveCompanyEmployees = Number(totalRows[0]?.inactive_total || 0);
 
     const attendanceQuery = `
       SELECT
@@ -317,7 +321,8 @@ export const get_all_users_with_attendance_history = async (req, res) => {
         emp_attendance.attendance_status AS employee_attendance_status,
         DATE_FORMAT(COALESCE(emp_attendance.attendance_date, ?), '%Y-%m-%d') AS attendance_date,
         emp_info.user_phone AS employee_phone,
-        emp_info.user_image AS employee_profile_img
+        emp_info.user_image AS employee_profile_img,
+        om.is_active AS org_member_is_active
       FROM apt_org_members om
       INNER JOIN apt_users emp_info ON emp_info.id = om.user_id
       LEFT JOIN attendance emp_attendance
@@ -330,7 +335,7 @@ export const get_all_users_with_attendance_history = async (req, res) => {
       LEFT JOIN apt_roles
         ON apt_roles.id = apt_user_roles.role_id
         AND apt_roles.org_id = om.org_id
-      WHERE om.org_id = ? AND om.is_active = 1
+      WHERE om.org_id = ?
       ORDER BY emp_info.user_name ASC
     `;
 
@@ -382,21 +387,24 @@ export const get_all_users_with_attendance_history = async (req, res) => {
         const resolvedStatus = rawStatus
           ? String(rawStatus)
           : "absent";
+        const isActiveEmployee = Number(row.org_member_is_active) === 1;
 
-        if (isPresentStatus(resolvedStatus) || (isLateStatus(resolvedStatus) && !isAbsentStatus(resolvedStatus))) {
-          selectedDatePresent += 1;
-        }
-        if (!rawStatus || isAbsentStatus(resolvedStatus)) {
-          selectedDateAbsent += 1;
-        }
-        if (isPresentStatus(resolvedStatus)) {
-          checkInOnTime += 1;
-        }
-        if (isLateStatus(resolvedStatus)) {
-          checkInLate += 1;
-        }
-        if (isLeaveStatus(resolvedStatus)) {
-          selectedDateOnLeave += 1;
+        if (isActiveEmployee) {
+          if (isPresentStatus(resolvedStatus) || (isLateStatus(resolvedStatus) && !isAbsentStatus(resolvedStatus))) {
+            selectedDatePresent += 1;
+          }
+          if (!rawStatus || isAbsentStatus(resolvedStatus)) {
+            selectedDateAbsent += 1;
+          }
+          if (isPresentStatus(resolvedStatus)) {
+            checkInOnTime += 1;
+          }
+          if (isLateStatus(resolvedStatus)) {
+            checkInLate += 1;
+          }
+          if (isLeaveStatus(resolvedStatus)) {
+            selectedDateOnLeave += 1;
+          }
         }
 
         const periodStats = periodStatsMap.get(Number(row.employee_id)) || {};
@@ -414,6 +422,7 @@ export const get_all_users_with_attendance_history = async (req, res) => {
           employee_working_hours: minutesToHours(row.employee_working_in_minutes),
           employee_attendance_status: resolvedStatus,
           attendance_date: row.attendance_date || selectedDate,
+          is_active_employee: isActiveEmployee,
           total_attendance_days: Number(periodStats.total_attendance_days || 0),
           total_present_days: Number(periodStats.total_present_days || 0),
           total_absent_days: Number(periodStats.total_absent_days || 0),
@@ -437,6 +446,7 @@ export const get_all_users_with_attendance_history = async (req, res) => {
 
     const headerData = {
       total_company_employees: totalCompanyEmployees,
+      inactive_company_employees: inactiveCompanyEmployees,
       selected_date_present_employees: selectedDatePresent,
       selected_date_absent_employees: selectedDateAbsent,
       check_in_on_time_employees: checkInOnTime,
