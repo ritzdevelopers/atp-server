@@ -3,6 +3,7 @@ import {
   create_new_group,
   get_all_groups_where_i_am_participant,
   get_my_group_chat,
+  get_group_members,
   edit_group_information,
   add_new_members_to_group,
   add_new_group_admin,
@@ -44,6 +45,9 @@ router.get("/get-all-groups", get_all_groups_where_i_am_participant);
 
 // Get Single Chat Of Group
 router.get("/get-my-group-chat/:group_id", get_my_group_chat);
+
+// Get Group Members (WhatsApp-style member list)
+router.get("/get-group-members/:group_id", get_group_members);
 
 // Edit Group Information *Patch
 router.patch("/edit-group-information/:group_id", edit_group_information);

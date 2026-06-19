@@ -1,4 +1,7 @@
-import { register_private_chat_events } from "../events/private.chat.events.js";
+import {
+  register_private_chat_events,
+  register_group_chat_events,
+} from "../events/private.chat.events.js";
 import UserActiveStatus from "../models/user_active_status.schema.js";
 
 /** org_id -> user_id -> Set<socket_id> */
@@ -58,6 +61,7 @@ export const register_socket_io = (io) => {
   io.on("connection", (socket) => {
     /*********************** Private Chat Events *******************/
     register_private_chat_events(io, socket);
+    register_group_chat_events(io, socket);
 
     /*********************** User Active Status Events *******************/
     socket.on("user_active_status", (user_id, org_id) => {

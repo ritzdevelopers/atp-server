@@ -431,6 +431,25 @@ export const get_my_group_chat = async (req, res) => {
 
     const { user_id: action_user_id } = req.user;
     const { org_id: company_id } = req;
+    const { group_id } = req.params;
+
+    if (!group_id) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Group Id Is Required",
+        error: "Group Id Is Required",
+      });
+    }
+
+    if (!isValidObjectId(group_id)) {
+      await connection.rollback();
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Group Id",
+        error: "Invalid Group Id",
+      });
+    }
 
     if (!(await isEmployeeExists(connection, action_user_id, company_id))) {
       await connection.rollback();
@@ -444,8 +463,8 @@ export const get_my_group_chat = async (req, res) => {
       );
     }
 
-    // Fetch My Single Group Chat
     const group_chat = await Chat.findOne({
+      _id: group_id,
       company_id,
       chat_type: "group",
       is_group_active: true,
@@ -1661,6 +1680,109 @@ export const inactive_group = async (req, res) => {
   }
 };
 
+export const get_group_members = async (req, res) => {
+  let connection;
+
+  try {
+    const { user_id: action_user_id } = req.user;
+    const { org_id: company_id } = req;
+    const { group_id } = req.params;
+
+    if (!group_id || !company_id || !action_user_id) {
+      return res.status(400).json({
+        success: false,
+        message: "Group Id Is Required",
+        error: "Group Id Is Required",
+      });
+    }
+
+    if (!isValidObjectId(group_id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid Group Id",
+        error: "Invalid Group Id",
+      });
+    }
+
+    connection = await pool.promise().getConnection();
+
+    if (!(await isEmployeeExists(connection, action_user_id, company_id))) {
+      return errorHandling(
+        connection,
+        res,
+        false,
+        "User Not Found",
+        new Error("User Not Found"),
+        404,
+      );
+    }
+
+    const group = await Chat.findOne({
+      _id: group_id,
+      company_id,
+      chat_type: "group",
+      is_group_active: true,
+      participants: { $in: [action_user_id] },
+    });
+
+    if (!group) {
+      return res.status(404).json({
+        success: false,
+        message: "Group Not Found",
+        error: "Group Not Found",
+      });
+    }
+
+    const adminIds = getGroupAdminIds(group);
+    const memberIds = getParticipantIds(group);
+    const usersMap = await fetchUsersMap(connection, [...memberIds, ...adminIds]);
+
+    const members = memberIds
+      .map((memberId) => {
+        const user = usersMap.get(memberId);
+        if (!user) return null;
+        return {
+          ...user,
+          is_admin: adminIds.includes(memberId),
+          is_you: Number(memberId) === Number(action_user_id),
+        };
+      })
+      .filter(Boolean);
+
+    const admins = adminIds
+      .map((adminId) => usersMap.get(adminId))
+      .filter(Boolean);
+
+    return res.status(200).json({
+      success: true,
+      message: "Group Members Fetched Successfully",
+      data: {
+        group: {
+          _id: group._id,
+          group_name: group.group_name,
+          group_image: group.group_image,
+          group_description: group.group_description,
+          member_count: memberIds.length,
+          created_at: group.createdAt ?? group.created_at ?? null,
+        },
+        admins,
+        members,
+        is_current_user_admin: isGroupAdmin(group, action_user_id),
+      },
+    });
+  } catch (error) {
+    console.error("get_group_members:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal Server Error",
+      error: error.message,
+    });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
+  }
+};
 
 export const get_org_users_for_chat = async (req, res) => {
   try {
@@ -1708,4 +1830,3 @@ export const get_org_users_for_chat = async (req, res) => {
     });
   }
 };
-
