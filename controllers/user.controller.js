@@ -474,7 +474,7 @@ export const get_all_users_controller = async (req, res) => {
     }
     const organization_owner_id = organization_owner_id_result[0].owner_id;
 
-    // Fetch All Users Of The Organization Except Organization Owner
+    // Fetch all org users except the organization owner and the requesting user
     const query = `
 SELECT 
   apt_users.id AS id,
@@ -558,12 +558,13 @@ ON emp_team.user_id = apt_users.id
 AND emp_team.org_id = apt_org_members.org_id
 
 WHERE apt_org_members.org_id = ?
-AND apt_users.id != ?
+AND apt_users.id <> ?
+AND apt_users.id <> ?
 `;
 
     const [result] = await db
       .promise()
-      .query(query, [organization_id, organization_owner_id]);
+      .query(query, [organization_id, organization_owner_id, action_user_id]);
 
     return res.status(200).json({
       message: "Users fetched successfully",
