@@ -10,7 +10,7 @@ const router = Router();
 
 router.get("/get-attendance-history-of-employee", user_validation_middleware, req_sender_auth, user_membership_checker,  getAttendanceHistoryOfEmployeeController);
 
-router.get("/get-all-users-with-attendance-history", user_validation_middleware, req_sender_auth, user_membership_checker, get_all_users_with_attendance_history);
+router.get("/get-all-users-with-attendance-history", user_validation_middleware, req_sender_auth,  get_all_users_with_attendance_history);
 
 router.get("/get-single-user-with-attendance-history", user_validation_middleware, req_sender_auth, user_membership_checker, get_single_user_with_attendance_history);
 
