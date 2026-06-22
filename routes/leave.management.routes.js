@@ -8,6 +8,7 @@ import {
   update_leave_type_controller,
   get_all_leave_types_controller,
   create_employee_leave_balance_controller,
+  leave_onboard_controller,
 } from "../controllers/leave.management.controller.js";
 import employee_feature_checker from "../middlewares/employee_feature_checker.js";
 
@@ -53,6 +54,11 @@ router.post(
   user_validation_middleware, req_sender_auth, user_membership_checker,
   employee_feature_checker("employee-management", "manage-leave-types", "create"),
   create_employee_leave_balance_controller,
+);
+
+router.post("/leave-onboard", user_validation_middleware, req_sender_auth, user_membership_checker,
+  employee_feature_checker("employee-management", "manage-leave-types", "create"),
+  leave_onboard_controller,
 );
 
 export default router;

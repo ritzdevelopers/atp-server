@@ -481,8 +481,13 @@ export const updateAttendanceQueryStatusController = async (req, res) => {
       return res.status(400).json({ message: "User not found" });
     }
     // -> id, user_id, org_id, team_id, category, query_message, attendance_date, approved_by, approved_by_name, admin_response, resolved_at
-    const { employee_id, query_id, admin_response, updated_query_status, team_id } =
-      req.body;
+    const {
+      employee_id,
+      query_id,
+      admin_response,
+      updated_query_status,
+      team_id,
+    } = req.body;
     if (!employee_id || !query_id || !admin_response || !updated_query_status) {
       await connection.rollback();
       return res.status(400).json({ message: "All fields are required" });
@@ -524,16 +529,30 @@ export const updateAttendanceQueryStatusController = async (req, res) => {
       return res.status(400).json({ message: "User not found" });
     }
     // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
-    if(!team_id || team_id === null) {  
-      if(!await user_role_checker(connection, action_user_id, org_id, "hr")) {
+    if (!team_id || team_id === null) {
+      if (
+        !(await user_role_checker(connection, action_user_id, org_id, "hr"))
+      ) {
         await connection.rollback();
-        return res.status(400).json({ message: "You are not authorized to process this query" });
+        return res
+          .status(400)
+          .json({ message: "You are not authorized to process this query" });
       }
     }
     // Check If The User Is The Team Lead ::
-    if(!(await check_team_lead(connection, employee_id, action_user_id, org_id, team_id))) {
+    if (
+      !(await check_team_lead(
+        connection,
+        employee_id,
+        action_user_id,
+        org_id,
+        team_id,
+      ))
+    ) {
       await connection.rollback();
-      return res.status(400).json({ message: "You are not authorized to process this query" });
+      return res
+        .status(400)
+        .json({ message: "You are not authorized to process this query" });
     }
     const approved_by_id = approved_by_info[0].id;
     const user_name = approved_by_info[0].user_name;
@@ -562,7 +581,14 @@ export const updateAttendanceQueryStatusController = async (req, res) => {
     }
 
     // Save Activity Log ::
-    await activity_tracker(connection, action_user_id, user_name, `Updated attendance query status to ${updated_query_status}`, org_id, "attendance_query_status_updated");
+    await activity_tracker(
+      connection,
+      action_user_id,
+      user_name,
+      `Updated attendance query status to ${updated_query_status}`,
+      org_id,
+      "attendance_query_status_updated",
+    );
     // Commit The Transaction ::
     await connection.commit();
     return res.status(200).json({
@@ -607,10 +633,14 @@ export const updateLeaveQueryStatusController = async (req, res) => {
     const { query_id, query_status: updated_status, team_id } = req.body;
 
     // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
-    if(!team_id || team_id === null) {  
-      if(!await user_role_checker(connection, action_user_id, org_id, "hr")) {
+    if (!team_id || team_id === null) {
+      if (
+        !(await user_role_checker(connection, action_user_id, org_id, "hr"))
+      ) {
         await connection.rollback();
-        return res.status(400).json({ message: "You are not authorized to process this query" });
+        return res
+          .status(400)
+          .json({ message: "You are not authorized to process this query" });
       }
     }
 
@@ -652,9 +682,19 @@ export const updateLeaveQueryStatusController = async (req, res) => {
         .json({ message: "Query has already been processed" });
     }
     // Check If The User Is The Team Lead ::
-    if(!(await check_team_lead(connection, employee_id, action_user_id, org_id, team_id))) {
+    if (
+      !(await check_team_lead(
+        connection,
+        employee_id,
+        action_user_id,
+        org_id,
+        team_id,
+      ))
+    ) {
       await connection.rollback();
-      return res.status(400).json({ message: "You are not authorized to process this query" });
+      return res
+        .status(400)
+        .json({ message: "You are not authorized to process this query" });
     }
     if (updated_status === "rejected") {
       // Update Leave Query Status ::
@@ -1545,5 +1585,171 @@ export const get_all_leave_types_controller = async (req, res) => {
   } catch (error) {
     console.error("get_all_leave_types_controller: ", error);
     return res.status(500).json({ message: "Internal server error" });
+  }
+};
+
+export const leave_onboard_controller = async (req, res) => {
+  let connection;
+  const validFrequencies = [
+    "monthly",
+    "quarterly",
+    "half_yearly",
+    "yearly",
+  ];
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+    const { user_id: action_user_id } = req.user;
+    const { org_id } = req;
+    const { employee_id: rawEmployeeId, leave_assign_info } = req.body;
+
+    if (!rawEmployeeId) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Employee ID is required" });
+    }
+
+    const employee_id = Number(rawEmployeeId);
+    if (!Number.isFinite(employee_id)) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Invalid employee ID" });
+    }
+
+    if (!Array.isArray(leave_assign_info) || leave_assign_info.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "Leave assignment information is required",
+      });
+    }
+    if (!(await isEmployeeExists(connection, action_user_id, org_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "User is not an employee" });
+    }
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      await connection.rollback();
+      return res.status(400).json({ message: "Employee not found" });
+    }
+    // leave_assign_info = [{
+    //   leave_type_id  ,
+    //   allocation_frequency  ,
+    //   leaves_per_cycle  ,
+    //   carry_forward  ,
+    //   max_carry_forward  ,
+    //   next_allocation_date  ,
+    // }];
+    let leave_schedule_count = 0;
+    for (const lv_sch_info of leave_assign_info) {
+      const {
+        leave_type_id,
+        allocation_frequency,
+        leaves_per_cycle,
+        carry_forward,
+        max_carry_forward,
+        next_allocation_date,
+      } = lv_sch_info;
+      if (
+        leave_type_id == null ||
+        allocation_frequency == null ||
+        leaves_per_cycle == null ||
+        carry_forward == null ||
+        next_allocation_date == null
+      ) {
+        console.log("Invalid Leave Schedule Information!");
+        continue;
+      }
+      if (!validFrequencies.includes(allocation_frequency)) {
+        console.log("Invalid allocation frequency!");
+        continue;
+      }
+      const normalizedLeavesPerCycle = Number(leaves_per_cycle);
+      if (
+        !Number.isFinite(normalizedLeavesPerCycle) ||
+        normalizedLeavesPerCycle < 1
+      ) {
+        console.log("Invalid leaves per cycle!");
+        continue;
+      }
+      const normalizedCarryForward = Boolean(carry_forward);
+      const normalizedMaxCarryForward = normalizedCarryForward
+        ? Number(max_carry_forward)
+        : 0;
+      if (
+        normalizedCarryForward &&
+        (!Number.isFinite(normalizedMaxCarryForward) ||
+          normalizedMaxCarryForward < 0)
+      ) {
+        console.log("Invalid max carry forward!");
+        continue;
+      }
+      // 1: Check if Leave Type Exists ::
+      const [leave_type] = await connection.query(
+        `SELECT * FROM leave_types WHERE id = ? AND org_id = ?`,
+        [leave_type_id, org_id],
+      );
+      if (leave_type.length === 0) {
+        console.log("Leave Type Not Found!");
+        continue;
+      }
+      // 2: Check if Employee Leave Balance Exists ::
+      const [employee_leave_balance] = await connection.query(
+        `SELECT * FROM employee_leave_balance WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
+        [employee_id, org_id, leave_type_id],
+      );
+      if (employee_leave_balance.length > 0) {
+        console.log("Employee Leave Balance Already Exists!");
+        continue;
+      }
+      // 3: Check if Leave Schedule Exists ::
+      const [leave_schedule] = await connection.query(
+        `SELECT * FROM leave_scheduler WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
+        [employee_id, org_id, leave_type_id],
+      );
+      if (leave_schedule.length > 0) {
+        console.log("Leave Schedule Already Exists!");
+        continue;
+      }
+      // 4: Save Leave Schedule ::
+      const [save_leave_schedule] = await connection.query(
+        `INSERT INTO leave_scheduler (user_id, org_id, leave_type_id, allocation_frequency, leaves_per_cycle, carry_forward, max_carry_forward, next_allocation_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          employee_id,
+          org_id,
+          leave_type_id,
+          allocation_frequency,
+          normalizedLeavesPerCycle,
+          normalizedCarryForward,
+          normalizedMaxCarryForward,
+          next_allocation_date,
+        ],
+      );
+      if (!save_leave_schedule || save_leave_schedule.affectedRows < 1) {
+        console.log("Failed to Save Leave Schedule!");
+        continue;
+      }
+      leave_schedule_count++;
+    }
+    if (leave_schedule_count === 0) {
+      await connection.rollback();
+      return res
+        .status(400)
+        .json({
+          message: "Failed to Create Leave Schedule For Any Leave Type!",
+        });
+    }
+    await connection.commit();
+    return res
+      .status(200)
+      .json({
+        message: `Leave Schedule Created Successfully For ${leave_schedule_count} Leave Types!`,
+      });
+  } catch (error) {
+    if (connection) {
+      await connection.rollback();
+    }
+    console.error("Error in leave_onboard_controller: ", error);
+    return res.status(500).json({ message: "Internal server error" });
+  } finally {
+    if (connection) {
+      connection.release();
+    }
   }
 };

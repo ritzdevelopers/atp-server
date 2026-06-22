@@ -30,6 +30,7 @@ import { Server } from "socket.io";
 import { createServer } from "http";
 import { register_socket_io } from "./sockets/socker.io.js";
 import connectMongo from "./db/connect_mongo.js";
+import "./helper/auto_leave_assign.js";
 
 dotenv.config();
 
