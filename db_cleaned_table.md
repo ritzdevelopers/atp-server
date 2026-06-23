@@ -971,3 +971,4 @@ CREATE TABLE leave_scheduler (
     FOREIGN KEY (leave_type_id) references leave_types(id)
 );
 
+ALTER TABLE leave_scheduler REMOVE  mark_done;

@@ -1,4 +1,4 @@
-import db, { pool } from "../db/connect";
+import db, { pool } from "../db/connect.js";
 import cron from "node-cron";
 
 cron.schedule("0 0 1 * *", async () => {
@@ -9,13 +9,10 @@ cron.schedule("0 0 1 * *", async () => {
     const orgs = await get_all_orgs_ids(connection);
     if (!orgs) {
       await connection.rollback();
-      return;
+      return false;
     }
-    const date = new Date();
-    let year = date.getFullYear();
-    let month = date.getMonth() + 1;
-    let day = date.getDate();
-    let dateYmd = `${year}-${month}-${day}`;
+    const dateYmd = formatDateYmd(new Date());
+    const [year, month] = dateYmd.split("-").map(Number);
 
     for (let { id: org_id } of orgs) {
       const all_pending_leaves = await get_all_pending_schedule_leaves(
@@ -49,7 +46,7 @@ cron.schedule("0 0 1 * *", async () => {
         );
         if (!is_present) {
           const [res] = await connection.query(
-            `INSERT INTO employee_leave_balance (user_id, org_id, leave_type_id, total_leaves, remaining_leaves, used_leaves)VALUES(?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO employee_leave_balance (user_id, org_id, leave_type_id, total_leaves, remaining_leaves, used_leaves) VALUES (?, ?, ?, ?, ?, ?)`,
             [
               user_id,
               org_id,
@@ -67,7 +64,7 @@ cron.schedule("0 0 1 * *", async () => {
           }
         } else {
           const [res] = await connection.query(
-            `UPDATE employee_leave_balance SET (total_leaves, remaining_leaves, used_leaves) VALUES(?, ?, ?) WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
+            `UPDATE employee_leave_balance SET total_leaves = ?, remaining_leaves = ?, used_leaves = ? WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
             [
               leaves_per_cycle,
               leaves_per_cycle,
@@ -120,7 +117,7 @@ cron.schedule("0 0 1 * *", async () => {
             );
             if (!is_present) {
               const [res] = await connection.query(
-                `INSERT INTO employee_leave_balance (user_id, org_id, leave_type_id, total_leaves, remaining_leaves, used_leaves)VALUES(?, ?, ?, ?, ?, ?)`,
+                `INSERT INTO employee_leave_balance (user_id, org_id, leave_type_id, total_leaves, remaining_leaves, used_leaves) VALUES (?, ?, ?, ?, ?, ?)`,
                 [
                   user_id2,
                   org_id,
@@ -138,7 +135,7 @@ cron.schedule("0 0 1 * *", async () => {
               }
             } else {
               const [res] = await connection.query(
-                `UPDATE employee_leave_balance SET (total_leaves, remaining_leaves, used_leaves) VALUES(?, ?, ?) WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
+                `UPDATE employee_leave_balance SET total_leaves = ?, remaining_leaves = ?, used_leaves = ? WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
                 [
                   leaves_per_cycle2,
                   leaves_per_cycle2,
@@ -173,27 +170,55 @@ cron.schedule("0 0 1 * *", async () => {
         
         }
         const remaining_leaves = total_leaves - deducted_leaves;
+        const last_leave_update = dateYmd;
         // If leave_balance exists then update the leave_balance otherwise insert the leave_balance
-        const [lv_balance] = await connection.query(`
-          SELECT * FROM leave_balance WHERE user_id = ? AND org_id = ?
-          `,[user_id, org_id]);
-          if(lv_balance.length > 0) {
-            await connection.query(`
-              UPDATE leave_balance SET (user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, last_leave_update)
-              VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-              `,[user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, new Date().toISOString().split("T")[0]]);
-          } else {
-            await connection.query(`
-              INSERT INTO leave_balance (user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, last_leave_update) VALUES(?, ?, ?, ?, ?, ?, ?, ?)
-              `,[user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, new Date().toISOString().split("T")[0]]);
-          }
+        const [lv_balance] = await connection.query(
+          `SELECT * FROM leave_balance WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?`,
+          [user_id, org_id, year, month],
+        );
+        if (lv_balance.length > 0) {
+          const used_leaves = lv_balance[0].used_leaves;
+          await connection.query(
+            `UPDATE leave_balance SET total_leaves = ?, used_leaves = ?, remaining_leaves = ?, last_leave_update = ? WHERE user_id = ? AND org_id = ? AND year = ? AND month = ?`,
+            [
+              total_leaves,
+              used_leaves,
+              remaining_leaves,
+              last_leave_update,
+              user_id,
+              org_id,
+              year,
+              month,
+            ],
+          );
+        } else {
+          await connection.query(
+            `INSERT INTO leave_balance (user_id, org_id, year, month, total_leaves, used_leaves, remaining_leaves, last_leave_update) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              user_id,
+              org_id,
+              year,
+              month,
+              total_leaves,
+              0,
+              remaining_leaves,
+              last_leave_update,
+            ],
+          );
+        }
       }
     }
     await connection.commit();
   } catch (error) {
+    await connection.rollback();
     console.log(
       `Internal Server Error Inside cron schedule function: ${error}`,
     );
+    return false;
+  } finally {
+    if (connection) {
+      await connection.release();
+    }
   }
 });
 
@@ -256,7 +281,10 @@ async function get_employee_leave_balance(
       `SELECT * FROM employee_leave_balance WHERE user_id = ? AND org_id = ? AND leave_type_id = ?`,
       [user_id, org_id, leave_type_id],
     );
-    return balance;
+    if (balance.length === 0) {
+      return false;
+    }
+    return true;
   } catch (error) {
     console.log(
       `Internal Server Error Inside get_employee_leave_balance function: ${error}`,
@@ -265,6 +293,11 @@ async function get_employee_leave_balance(
   }
 }
 const validFrequencies = ["monthly", "quarterly", "half_yearly", "yearly"];
+
+function formatDateYmd(date = new Date()) {
+  return date.toISOString().split("T")[0];
+}
+
 function date_allocation_calculator(allocation_frequency, current_dateYmd) {
   if (!validFrequencies.includes(allocation_frequency)) {
     return false;
@@ -273,15 +306,15 @@ function date_allocation_calculator(allocation_frequency, current_dateYmd) {
   switch (allocation_frequency) {
     case "monthly":
       new_date.setMonth(new_date.getMonth() + 1);
-      return new_date.toISOString().split("T")[0];
+      return formatDateYmd(new_date);
     case "quarterly":
       new_date.setMonth(new_date.getMonth() + 3);
-      return new_date.toISOString().split("T")[0];
+      return formatDateYmd(new_date);
     case "half_yearly":
       new_date.setMonth(new_date.getMonth() + 6);
-      return new_date.toISOString().split("T")[0];
+      return formatDateYmd(new_date);
     case "yearly":
       new_date.setFullYear(new_date.getFullYear() + 1);
-      return new_date.toISOString().split("T")[0];
+      return formatDateYmd(new_date);
   }
 }

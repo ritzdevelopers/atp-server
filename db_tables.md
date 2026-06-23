@@ -1041,3 +1041,4 @@ CREATE TABLE organization_address (
 
 ALTER TABLE apt_users
 ADD COLUMN user_image TEXT;
+
