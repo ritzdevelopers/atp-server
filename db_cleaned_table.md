@@ -938,3 +938,37 @@ CREATE TABLE employee_tasks(
     FOREIGN KEY (assigned_by) REFERENCES apt_users(id),
     FOREIGN KEY (reporting_manager) REFERENCES apt_users(id)
 );
+
+CREATE TABLE leave_scheduler (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    leave_type_id INT NOT NULL,
+
+    allocation_frequency ENUM(
+        'monthly',
+        'quarterly',
+        'half_yearly',
+        'yearly'
+    ) NOT NULL,
+
+    leaves_per_cycle INT NOT NULL,
+
+    carry_forward BOOLEAN DEFAULT FALSE,
+
+    max_carry_forward INT DEFAULT 0,
+
+    next_allocation_date DATE NOT NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES apt_users(id),
+    FOREIGN KEY (org_id) REFERENCES apt_organizations(id),
+    FOREIGN KEY (leave_type_id) references leave_types(id)
+);
+
+ALTER TABLE leave_scheduler REMOVE  mark_done;

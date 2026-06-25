@@ -25,11 +25,16 @@ import subFeatureRoutes from "./routes/super_admin/route.js";
 import dashboardRoutes from "./routes/dashboard.routes.js";
 import taskManagemenRoutes from "./routes/tasks/taskManagement.route.js";
 import chatApplicationRoutes from "./routes/chats/chats.route.js";
+import biometricRoutes from "./routes/biometric.routes.js";
 
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { register_socket_io } from "./sockets/socker.io.js";
+import { setSocketIo } from "./sockets/io.instance.js";
 import connectMongo from "./db/connect_mongo.js";
+import { ensureBiometricSchema } from "./db/ensureBiometricSchema.js";
+import { startBiometricPoller } from "./services/biometric/biometricPoller.js";
+import "./helper/auto_leave_assign.js";
 
 dotenv.config();
 
@@ -50,6 +55,7 @@ const io = new Server(socket_server, {
   },
 });
 register_socket_io(io);
+setSocketIo(io);
 
 
 app.use(
@@ -139,12 +145,17 @@ app.use("/api/dashboard-management", dashboardRoutes);
 // Chat Application Routes ::
 app.use("/api/chat-application", chatApplicationRoutes);
 
+// Biometric attendance sync
+app.use("/api/biometric", biometricRoutes);
+
 socket_server.listen(3000, async () => {
   try {
     await ensureLeaveQuirySchema();
     await connectMongo();
+    await ensureBiometricSchema();
+    startBiometricPoller();
   } catch (err) {
-    console.error("[schema] leave_quiry migration failed:", err.message);
+    console.error("[startup] schema/migration failed:", err.message);
   }
   console.log("Server is running on port 3000");
 });
