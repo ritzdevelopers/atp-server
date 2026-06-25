@@ -53,7 +53,12 @@ export const markAttendanceLogController = async (
         [ip_address, org_id]
       );
   
-      if (ip_address !==  "::1" && ip_address !== "::ffff:127.0.0.1" && ip.length === 0) {
+      if (
+        ip_address !== "biometric" &&
+        ip_address !== "::1" &&
+        ip_address !== "::ffff:127.0.0.1" &&
+        ip.length === 0
+      ) {
         return {
           success: false,
           message: "IP address not allowed to mark attendance",
