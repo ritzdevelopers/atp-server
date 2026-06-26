@@ -8,6 +8,7 @@ import {
   deleteBiometricMappingController,
   syncBiometricNowController,
   biometricWebhookController,
+  biometricWebhookBatchController,
   getLivePunchesController,
   getMyLiveAttendanceController,
   getLiveCursorController,
@@ -17,6 +18,7 @@ import {
 const router = express.Router();
 
 router.post("/webhook", biometricWebhookController);
+router.post("/webhook/batch", biometricWebhookBatchController);
 
 router.get(
   "/status",

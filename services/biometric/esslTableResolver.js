@@ -79,6 +79,9 @@ export function mapBiometricRow(row, sourceTable) {
     ) ?? 0,
   );
 
+  const safeRowId =
+    Number.isFinite(rowId) && rowId > 0 ? Math.floor(rowId) : 0;
+
   const deviceId = String(
     getRowValue(row, "DeviceId", "InDeviceId", "OutDeviceId", "MachineNumber") ??
       "",
@@ -86,7 +89,7 @@ export function mapBiometricRow(row, sourceTable) {
 
   return {
     source_table: sourceTable,
-    source_row_id: rowId,
+    source_row_id: safeRowId,
     employee_code: employeeCode,
     punch_at: punchAt,
     direction,
@@ -110,9 +113,10 @@ export function buildPunchFingerprint(mapped) {
 export async function resolveBiometricIdColumn(pool, tableName) {
   const safe = tableName.replace(/]/g, "]]");
   const result = await pool.request().query(`
-    SELECT COLUMN_NAME
+    SELECT COLUMN_NAME, DATA_TYPE
     FROM INFORMATION_SCHEMA.COLUMNS
     WHERE TABLE_NAME = '${safe.replace(/'/g, "''")}'
+    ORDER BY ORDINAL_POSITION ASC
   `);
 
   const columns = result.recordset.map((r) => r.COLUMN_NAME);
@@ -125,10 +129,26 @@ export async function resolveBiometricIdColumn(pool, tableName) {
   ];
 
   for (const name of preferred) {
-    if (columns.includes(name)) return name;
+    const match = columns.find((c) => c.toLowerCase() === name.toLowerCase());
+    if (match) return match;
   }
 
-  return columns[0] ?? "Id";
+  const numericTypes = new Set([
+    "int",
+    "bigint",
+    "smallint",
+    "tinyint",
+    "decimal",
+    "numeric",
+  ]);
+  const numericIdCol = result.recordset.find(
+    (r) =>
+      numericTypes.has(String(r.DATA_TYPE).toLowerCase()) &&
+      /id$/i.test(r.COLUMN_NAME),
+  );
+  if (numericIdCol) return numericIdCol.COLUMN_NAME;
+
+  return columns[0] ?? "DeviceLogId";
 }
 
 function currentMonthSuffix() {
