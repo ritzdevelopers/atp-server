@@ -1,4 +1,5 @@
 import { pool } from "../../db/connect.js";
+import { isMappedEmployeesOnly } from "./manageAttendanceOptions.js";
 
 function minutesToHours(minutesValue) {
   if (minutesValue === null || minutesValue === undefined || minutesValue === "") {
@@ -30,7 +31,7 @@ function isAbsentStatus(status) {
 
 /**
  * Manage-attendance from cloud MySQL (synced by office attendance-sync-agent).
- * Used on Render where SQL Server is not reachable.
+ * By default only employees with a biometric_employee_mappings row are included.
  */
 export async function fetchMysqlManageAttendance(
   orgId,
@@ -38,49 +39,92 @@ export async function fetchMysqlManageAttendance(
   selectedMonth,
   selectedYear,
 ) {
+  const mappedOnly = isMappedEmployeesOnly();
+
   const [totalRows] = await pool.promise().query(
-    `SELECT
-       SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_total,
-       SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
-     FROM apt_org_members WHERE org_id = ?`,
+    mappedOnly
+      ? `SELECT
+           SUM(CASE WHEN om.is_active = 1 THEN 1 ELSE 0 END) AS active_total,
+           SUM(CASE WHEN om.is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
+         FROM biometric_employee_mappings m
+         INNER JOIN apt_org_members om
+           ON om.user_id = m.user_id AND om.org_id = m.org_id
+         WHERE m.org_id = ?`
+      : `SELECT
+           SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_total,
+           SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
+         FROM apt_org_members WHERE org_id = ?`,
     [orgId],
   );
   const activeTotal = Number(totalRows[0]?.active_total || 0);
   const inactiveTotal = Number(totalRows[0]?.inactive_total || 0);
 
   const [attendanceRows] = await pool.promise().query(
-    `SELECT
-       emp_info.id AS employee_id,
-       emp_info.id AS user_id,
-       emp_info.user_name AS employee_name,
-       emp_info.user_email AS employee_email,
-       om.org_id AS org_id,
-       COALESCE(apt_roles.role_name, 'employee') AS employee_designation,
-       DATE_FORMAT(emp_attendance.check_in, '%Y-%m-%d %H:%i:%s') AS attendance_check_in_time,
-       DATE_FORMAT(emp_attendance.check_out, '%Y-%m-%d %H:%i:%s') AS attendance_check_out_time,
-       emp_attendance.working_time AS employee_working_in_minutes,
-       emp_attendance.attendance_status AS employee_attendance_status,
-       DATE_FORMAT(COALESCE(emp_attendance.attendance_date, ?), '%Y-%m-%d') AS attendance_date,
-       emp_info.user_phone AS employee_phone,
-       emp_info.user_image AS employee_profile_img,
-       om.is_active AS org_member_is_active,
-       m.biometric_employee_code
-     FROM apt_org_members om
-     INNER JOIN apt_users emp_info ON emp_info.id = om.user_id
-     LEFT JOIN attendance emp_attendance
-       ON emp_attendance.user_id = emp_info.id
-       AND emp_attendance.org_id = om.org_id
-       AND emp_attendance.attendance_date = ?
-     LEFT JOIN apt_user_roles
-       ON apt_user_roles.user_id = emp_info.id
-       AND apt_user_roles.org_id = om.org_id
-     LEFT JOIN apt_roles
-       ON apt_roles.id = apt_user_roles.role_id
-       AND apt_roles.org_id = om.org_id
-     LEFT JOIN biometric_employee_mappings m
-       ON m.user_id = emp_info.id AND m.org_id = om.org_id
-     WHERE om.org_id = ?
-     ORDER BY emp_info.user_name ASC`,
+    mappedOnly
+      ? `SELECT
+           emp_info.id AS employee_id,
+           emp_info.id AS user_id,
+           emp_info.user_name AS employee_name,
+           emp_info.user_email AS employee_email,
+           om.org_id AS org_id,
+           COALESCE(apt_roles.role_name, 'employee') AS employee_designation,
+           DATE_FORMAT(emp_attendance.check_in, '%Y-%m-%d %H:%i:%s') AS attendance_check_in_time,
+           DATE_FORMAT(emp_attendance.check_out, '%Y-%m-%d %H:%i:%s') AS attendance_check_out_time,
+           emp_attendance.working_time AS employee_working_in_minutes,
+           emp_attendance.attendance_status AS employee_attendance_status,
+           DATE_FORMAT(COALESCE(emp_attendance.attendance_date, ?), '%Y-%m-%d') AS attendance_date,
+           emp_info.user_phone AS employee_phone,
+           emp_info.user_image AS employee_profile_img,
+           om.is_active AS org_member_is_active,
+           m.biometric_employee_code
+         FROM biometric_employee_mappings m
+         INNER JOIN apt_org_members om
+           ON om.user_id = m.user_id AND om.org_id = m.org_id
+         INNER JOIN apt_users emp_info ON emp_info.id = m.user_id
+         LEFT JOIN attendance emp_attendance
+           ON emp_attendance.user_id = emp_info.id
+           AND emp_attendance.org_id = om.org_id
+           AND emp_attendance.attendance_date = ?
+         LEFT JOIN apt_user_roles
+           ON apt_user_roles.user_id = m.user_id
+           AND apt_user_roles.org_id = m.org_id
+         LEFT JOIN apt_roles
+           ON apt_roles.id = apt_user_roles.role_id
+           AND apt_roles.org_id = m.org_id
+         WHERE m.org_id = ?
+         ORDER BY emp_info.user_name ASC`
+      : `SELECT
+           emp_info.id AS employee_id,
+           emp_info.id AS user_id,
+           emp_info.user_name AS employee_name,
+           emp_info.user_email AS employee_email,
+           om.org_id AS org_id,
+           COALESCE(apt_roles.role_name, 'employee') AS employee_designation,
+           DATE_FORMAT(emp_attendance.check_in, '%Y-%m-%d %H:%i:%s') AS attendance_check_in_time,
+           DATE_FORMAT(emp_attendance.check_out, '%Y-%m-%d %H:%i:%s') AS attendance_check_out_time,
+           emp_attendance.working_time AS employee_working_in_minutes,
+           emp_attendance.attendance_status AS employee_attendance_status,
+           DATE_FORMAT(COALESCE(emp_attendance.attendance_date, ?), '%Y-%m-%d') AS attendance_date,
+           emp_info.user_phone AS employee_phone,
+           emp_info.user_image AS employee_profile_img,
+           om.is_active AS org_member_is_active,
+           m.biometric_employee_code
+         FROM apt_org_members om
+         INNER JOIN apt_users emp_info ON emp_info.id = om.user_id
+         LEFT JOIN attendance emp_attendance
+           ON emp_attendance.user_id = emp_info.id
+           AND emp_attendance.org_id = om.org_id
+           AND emp_attendance.attendance_date = ?
+         LEFT JOIN apt_user_roles
+           ON apt_user_roles.user_id = emp_info.id
+           AND apt_user_roles.org_id = om.org_id
+         LEFT JOIN apt_roles
+           ON apt_roles.id = apt_user_roles.role_id
+           AND apt_roles.org_id = om.org_id
+         LEFT JOIN biometric_employee_mappings m
+           ON m.user_id = emp_info.id AND m.org_id = om.org_id
+         WHERE om.org_id = ?
+         ORDER BY emp_info.user_name ASC`,
     [selectedDate, selectedDate, orgId],
   );
 
@@ -120,6 +164,8 @@ export async function fetchMysqlManageAttendance(
   const employeesAttendanceData = [];
 
   for (const row of attendanceRows) {
+    if (mappedOnly && !row.biometric_employee_code) continue;
+
     const rawStatus = row.employee_attendance_status;
     const resolvedStatus = rawStatus ? String(rawStatus) : "absent";
     const isActiveEmployee = Number(row.org_member_is_active) === 1;
