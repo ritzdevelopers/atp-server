@@ -6,6 +6,7 @@ import {
   parseRawDirection,
   wallTimeToMinutesSinceMidnight,
 } from "./punchDirection.js";
+import { isMappedEmployeesOnly } from "./manageAttendanceOptions.js";
 
 function resolveTableForDate(dateStr) {
   const base = process.env.BIOMETRIC_TABLE_NAME || "DeviceLogs";
@@ -209,6 +210,7 @@ export async function fetchBiometricManageAttendance(
   let inactiveTotal = 0;
 
   const employeesAttendanceData = [];
+  const mappedOnly = isMappedEmployeesOnly();
 
   for (const emp of empResult.recordset) {
     if (isJunkBiometricEmployee(emp)) continue;
@@ -216,6 +218,9 @@ export async function fetchBiometricManageAttendance(
     const code = String(emp.EmployeeCode ?? "").trim();
     const codeKey = code.toUpperCase();
     const mapping = mappingByCode.get(codeKey);
+
+    if (mappedOnly && !mapping) continue;
+
     const userId = mapping?.user_id != null ? Number(mapping.user_id) : null;
     const punches = punchesByCode.get(codeKey) ?? [];
     const shiftEnd = mapping?.shift_end_time ?? null;
