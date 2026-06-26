@@ -14,6 +14,7 @@ import {
   fetchLatestDeviceLogId,
 } from "../services/biometric/fetchLivePunches.js";
 import { fetchBiometricManageAttendance } from "../services/biometric/fetchBiometricManageAttendance.js";
+import { fetchMysqlManageAttendance } from "../services/biometric/fetchMysqlManageAttendance.js";
 
 /** Auth for on-prem sync agent: Bearer token or legacy webhook secret header. */
 function authenticateSyncAgent(req) {
@@ -29,6 +30,19 @@ function authenticateSyncAgent(req) {
     req.headers["x-biometric-secret"] || req.headers["x-webhook-secret"];
 
   return bearer === expected || headerSecret === expected;
+}
+
+/** Cloud (Render): read MySQL synced by office agent. Office: read SQL directly. */
+function shouldUseMysqlForManageAttendance() {
+  const source = String(
+    process.env.BIOMETRIC_MANAGE_ATTENDANCE_SOURCE || "",
+  ).toLowerCase();
+  if (source === "mysql") return true;
+  if (source === "sql" || source === "mssql") return false;
+  return (
+    String(process.env.BIOMETRIC_SYNC_ENABLED || "false") !== "true" ||
+    String(process.env.BIOMETRIC_RUN_SYNC_IN_APP || "true") !== "true"
+  );
 }
 
 async function enrichPunchesWithPortalUsers(orgId, punches) {
@@ -544,12 +558,20 @@ export const getBiometricManageAttendanceController = async (req, res) => {
     const [selectedYear, selectedMonth] = selectedDate.split("-").map(Number);
     const statusFilter = String(req.query.status || "").trim().toLowerCase();
 
-    const result = await fetchBiometricManageAttendance(
-      orgId,
-      selectedDate,
-      selectedMonth,
-      selectedYear,
-    );
+    const useMysql = shouldUseMysqlForManageAttendance();
+    const result = useMysql
+      ? await fetchMysqlManageAttendance(
+          orgId,
+          selectedDate,
+          selectedMonth,
+          selectedYear,
+        )
+      : await fetchBiometricManageAttendance(
+          orgId,
+          selectedDate,
+          selectedMonth,
+          selectedYear,
+        );
 
     let employees = result.employees_attendance_data;
     if (statusFilter) {
@@ -563,13 +585,50 @@ export const getBiometricManageAttendanceController = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      source: "biometric",
+      source: useMysql ? "mysql" : "biometric",
       selected_date: result.selected_date,
       header_data: result.header_data,
       employees_attendance_data: employees,
     });
   } catch (error) {
     console.error("getBiometricManageAttendanceController:", error);
+
+    if (!shouldUseMysqlForManageAttendance()) {
+      try {
+        const orgId = resolveOrgId(req);
+        const dateParam = String(req.query.date || "").trim();
+        const selectedDate = /^\d{4}-\d{2}-\d{2}$/.test(dateParam)
+          ? dateParam
+          : new Date().toISOString().slice(0, 10);
+        const [selectedYear, selectedMonth] = selectedDate.split("-").map(Number);
+        const statusFilter = String(req.query.status || "").trim().toLowerCase();
+        const result = await fetchMysqlManageAttendance(
+          orgId,
+          selectedDate,
+          selectedMonth,
+          selectedYear,
+        );
+        let employees = result.employees_attendance_data;
+        if (statusFilter) {
+          employees = employees.filter(
+            (row) =>
+              String(row.employee_attendance_status || "")
+                .trim()
+                .toLowerCase() === statusFilter,
+          );
+        }
+        return res.status(200).json({
+          success: true,
+          source: "mysql",
+          selected_date: result.selected_date,
+          header_data: result.header_data,
+          employees_attendance_data: employees,
+        });
+      } catch (fallbackErr) {
+        console.error("manage-attendance mysql fallback failed:", fallbackErr);
+      }
+    }
+
     return res.status(500).json({
       message: error.message || "Could not load biometric manage attendance",
     });
