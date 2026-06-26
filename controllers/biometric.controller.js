@@ -15,6 +15,22 @@ import {
 } from "../services/biometric/fetchLivePunches.js";
 import { fetchBiometricManageAttendance } from "../services/biometric/fetchBiometricManageAttendance.js";
 
+/** Auth for on-prem sync agent: Bearer token or legacy webhook secret header. */
+function authenticateSyncAgent(req) {
+  const expected =
+    process.env.BIOMETRIC_SYNC_AGENT_TOKEN ||
+    process.env.BIOMETRIC_WEBHOOK_SECRET;
+  if (!expected) return true;
+
+  const bearer = String(req.headers.authorization || "")
+    .replace(/^Bearer\s+/i, "")
+    .trim();
+  const headerSecret =
+    req.headers["x-biometric-secret"] || req.headers["x-webhook-secret"];
+
+  return bearer === expected || headerSecret === expected;
+}
+
 async function enrichPunchesWithPortalUsers(orgId, punches) {
   if (!punches?.length) return punches ?? [];
 
@@ -318,13 +334,8 @@ export const syncBiometricNowController = async (req, res) => {
 
 export const biometricWebhookController = async (req, res) => {
   try {
-    const secret = process.env.BIOMETRIC_WEBHOOK_SECRET;
-    if (secret) {
-      const provided =
-        req.headers["x-biometric-secret"] || req.headers["x-webhook-secret"];
-      if (provided !== secret) {
-        return res.status(401).json({ message: "Invalid webhook secret" });
-      }
+    if (!authenticateSyncAgent(req)) {
+      return res.status(401).json({ message: "Unauthorized" });
     }
 
     const orgId = resolveOrgId(req);
@@ -380,6 +391,138 @@ export const biometricWebhookController = async (req, res) => {
   } catch (error) {
     console.error("biometricWebhookController:", error);
     return res.status(500).json({ message: error.message || "Webhook failed" });
+  }
+};
+
+/**
+ * POST /api/biometric/webhook/batch
+ * Batch upload from on-prem Attendance Sync Agent (max 500 records).
+ */
+export const biometricWebhookBatchController = async (req, res) => {
+  try {
+    if (!authenticateSyncAgent(req)) {
+      return res.status(401).json({ message: "Unauthorized" });
+    }
+
+    const orgId = resolveOrgId(req);
+    if (!orgId) {
+      return res.status(400).json({ message: "org_id is required" });
+    }
+
+    const records = req.body?.records;
+    if (!Array.isArray(records) || records.length === 0) {
+      return res.status(400).json({ message: "records array is required" });
+    }
+    if (records.length > 500) {
+      return res.status(400).json({
+        message: "Maximum 500 records per batch",
+      });
+    }
+
+    const connection = await pool.promise().getConnection();
+    let imported = 0;
+    let skipped = 0;
+    let failed = 0;
+    const errors = [];
+
+    try {
+      for (const rec of records) {
+        const code = String(
+          rec.biometric_employee_code || rec.employee_code || "",
+        ).trim();
+        const punchAt = rec.punch_at;
+
+        if (!code || !punchAt) {
+          skipped += 1;
+          continue;
+        }
+
+        const clock = formatPunchInIndia(punchAt);
+        if (!clock) {
+          skipped += 1;
+          continue;
+        }
+
+        const sourceTable = String(rec.source_table || "sync_agent").trim();
+        const sourceRowId = Number(rec.source_row_id) || 0;
+
+        if (sourceRowId > 0) {
+          const [existing] = await connection.query(
+            `SELECT id FROM biometric_processed_punches
+             WHERE org_id = ? AND source_table = ? AND source_row_id = ?
+             LIMIT 1`,
+            [orgId, sourceTable, sourceRowId],
+          );
+          if (existing.length > 0) {
+            skipped += 1;
+            continue;
+          }
+        }
+
+        try {
+          await connection.beginTransaction();
+          const outcome = await processBiometricPunch(connection, orgId, {
+            source_table: sourceTable,
+            source_row_id: sourceRowId > 0 ? sourceRowId : Date.now(),
+            employee_code: code,
+            punch_at: punchAt,
+            direction: rec.direction ?? "unknown",
+            device_id: rec.device_id ?? null,
+          });
+
+          if (sourceRowId > 0) {
+            await connection.query(
+              `INSERT IGNORE INTO biometric_processed_punches
+               (org_id, source_table, source_row_id, punch_fingerprint)
+               VALUES (?, ?, ?, ?)`,
+              [
+                orgId,
+                sourceTable,
+                sourceRowId,
+                `${sourceTable}|${sourceRowId}|${code}`,
+              ],
+            );
+          }
+
+          await connection.commit();
+
+          if (outcome.skipped) {
+            skipped += 1;
+          } else {
+            imported += 1;
+            if (outcome.event) {
+              outcome.event.source = "sync_agent";
+              emitAttendanceLiveUpdate(outcome.event);
+            }
+          }
+        } catch (err) {
+          await connection.rollback();
+          failed += 1;
+          errors.push({
+            biometric_employee_code: code,
+            source_row_id: sourceRowId,
+            message: err.message,
+          });
+        }
+      }
+    } finally {
+      connection.release();
+    }
+
+    return res.status(200).json({
+      success: true,
+      org_id: orgId,
+      received: records.length,
+      imported,
+      skipped,
+      failed,
+      errors: errors.length ? errors.slice(0, 20) : undefined,
+    });
+  } catch (error) {
+    console.error("biometricWebhookBatchController:", error);
+    return res.status(500).json({
+      message: error.message || "Batch webhook failed",
+    });
   }
 };
 

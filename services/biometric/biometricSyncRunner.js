@@ -9,7 +9,15 @@ import {
 import { processBiometricPunch } from "./processBiometricPunch.js";
 import { emitAttendanceLiveUpdate } from "../../events/attendance.events.js";
 
-const BATCH_SIZE = Number(process.env.BIOMETRIC_SYNC_BATCH_SIZE || 200);
+function toSafeCursorId(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) return 0;
+  return Math.floor(n);
+}
+
+const BATCH_SIZE = toSafeCursorId(
+  Number(process.env.BIOMETRIC_SYNC_BATCH_SIZE || 200) || 200,
+) || 200;
 
 let lastRunAt = null;
 let lastRunStatus = "idle";
@@ -37,7 +45,7 @@ async function getCursor(connection, orgId, sourceTable) {
      LIMIT 1`,
     [orgId, sourceTable],
   );
-  return Number(rows[0]?.last_cursor_id ?? 0);
+  return toSafeCursorId(rows[0]?.last_cursor_id ?? 0);
 }
 
 async function initializeCursorIfNeeded(
@@ -48,9 +56,10 @@ async function initializeCursorIfNeeded(
   idColumn,
   cursor,
 ) {
-  if (cursor > 0) return cursor;
+  const safeCursor = toSafeCursorId(cursor);
+  if (safeCursor > 0) return safeCursor;
   if (String(process.env.BIOMETRIC_SYNC_SKIP_HISTORY || "true") !== "true") {
-    return cursor;
+    return safeCursor;
   }
 
   const safeTable = sourceTable.replace(/]/g, "]]");
@@ -58,7 +67,7 @@ async function initializeCursorIfNeeded(
   const maxResult = await mssqlPool.request().query(`
     SELECT MAX([${safeColumn}]) AS maxId FROM [${safeTable}]
   `);
-  const maxId = Number(maxResult.recordset[0]?.maxId ?? 0);
+  const maxId = toSafeCursorId(maxResult.recordset[0]?.maxId ?? 0);
   if (maxId > 0) {
     await setCursor(mysqlConnection, orgId, sourceTable, maxId);
     console.log(
@@ -66,17 +75,20 @@ async function initializeCursorIfNeeded(
     );
     return maxId;
   }
-  return cursor;
+  return safeCursor;
 }
 
 async function setCursor(connection, orgId, sourceTable, cursorId) {
+  const safeId = toSafeCursorId(cursorId);
+  if (safeId <= 0) return;
+
   await connection.query(
     `INSERT INTO biometric_sync_state (org_id, source_table, last_cursor_id, last_synced_at)
      VALUES (?, ?, ?, NOW())
      ON DUPLICATE KEY UPDATE
        last_cursor_id = GREATEST(last_cursor_id, VALUES(last_cursor_id)),
        last_synced_at = NOW()`,
-    [orgId, sourceTable, cursorId],
+    [orgId, sourceTable, safeId],
   );
 }
 
@@ -111,14 +123,15 @@ async function syncTable(orgId, sourceTable, mssqlPool, mysqlConnection) {
   const idColumn = await resolveBiometricIdColumn(mssqlPool, sourceTable);
   const safeTable = sourceTable.replace(/]/g, "]]");
   const safeColumn = idColumn.replace(/]/g, "]]");
-  let cursor = await getCursor(mysqlConnection, orgId, sourceTable);
-  cursor = await initializeCursorIfNeeded(
-    mssqlPool,
-    mysqlConnection,
-    orgId,
-    sourceTable,
-    idColumn,
-    cursor,
+  let cursor = toSafeCursorId(
+    await initializeCursorIfNeeded(
+      mssqlPool,
+      mysqlConnection,
+      orgId,
+      sourceTable,
+      idColumn,
+      await getCursor(mysqlConnection, orgId, sourceTable),
+    ),
   );
 
   const result = await mssqlPool.request().query(`
@@ -134,12 +147,12 @@ async function syncTable(orgId, sourceTable, mssqlPool, mysqlConnection) {
 
   for (const row of result.recordset) {
     const mapped = mapBiometricRow(row, sourceTable);
-    if (!mapped.source_row_id) {
+    if (!mapped.source_row_id || !Number.isFinite(mapped.source_row_id)) {
       skipped += 1;
       continue;
     }
 
-    maxId = Math.max(maxId, mapped.source_row_id);
+    maxId = Math.max(maxId, toSafeCursorId(mapped.source_row_id));
     const fingerprint = buildPunchFingerprint(mapped);
 
     const already = await isPunchProcessed(
