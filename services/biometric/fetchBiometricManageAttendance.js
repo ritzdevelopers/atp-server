@@ -6,7 +6,7 @@ import {
   parseRawDirection,
   wallTimeToMinutesSinceMidnight,
 } from "./punchDirection.js";
-import { isMappedEmployeesOnly } from "./manageAttendanceOptions.js";
+import { isMappedEmployeesOnly, isRmwEmailOnly, isRmwPortalEmail } from "./manageAttendanceOptions.js";
 
 function resolveTableForDate(dateStr) {
   const base = process.env.BIOMETRIC_TABLE_NAME || "DeviceLogs";
@@ -211,6 +211,7 @@ export async function fetchBiometricManageAttendance(
 
   const employeesAttendanceData = [];
   const mappedOnly = isMappedEmployeesOnly();
+  const rmwEmailOnly = isRmwEmailOnly();
 
   for (const emp of empResult.recordset) {
     if (isJunkBiometricEmployee(emp)) continue;
@@ -220,6 +221,10 @@ export async function fetchBiometricManageAttendance(
     const mapping = mappingByCode.get(codeKey);
 
     if (mappedOnly && !mapping) continue;
+    if (rmwEmailOnly) {
+      const portalEmail = mapping?.user_email || "";
+      if (!isRmwPortalEmail(portalEmail)) continue;
+    }
 
     const userId = mapping?.user_id != null ? Number(mapping.user_id) : null;
     const punches = punchesByCode.get(codeKey) ?? [];

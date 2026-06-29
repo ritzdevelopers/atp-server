@@ -1,6 +1,7 @@
 import { markAttendanceLogController } from "../../helper/mark_attendance_logs.js";
 import { formatPunchInIndia } from "./esslTableResolver.js";
 import {
+  isAtOrAfterCheckoutThreshold,
   resolvePunchDirection,
   timeToMinutes,
   wallTimeToMinutesSinceMidnight,
@@ -172,27 +173,37 @@ export async function processBiometricPunch(connection, orgId, mapped) {
     }
 
     if (existing.check_out) {
-      eventType = "duplicate_check_out";
-      return {
-        ok: true,
-        skipped: false,
-        duplicate: true,
-        event: buildEventPayload({
-          orgId,
-          eventType,
-          attendanceId: existing.id,
-          userId,
-          userName,
-          userEmail,
-          employeeCode,
-          portalUser,
-          mapped,
-          clock,
-          checkIn: existing.check_in,
-          checkOut: existing.check_out,
-          attendanceStatus: existing.attendance_status,
-        }),
-      };
+      const existingOutMin = wallTimeToMinutesSinceMidnight(existing.check_out);
+      const newOutMin = wallTimeToMinutesSinceMidnight(clock.time_part);
+      const isLaterCheckout =
+        Number.isFinite(existingOutMin) &&
+        Number.isFinite(newOutMin) &&
+        newOutMin > existingOutMin &&
+        isAtOrAfterCheckoutThreshold(clock.time_part, shift?.end_time);
+
+      if (!isLaterCheckout) {
+        eventType = "duplicate_check_out";
+        return {
+          ok: true,
+          skipped: false,
+          duplicate: true,
+          event: buildEventPayload({
+            orgId,
+            eventType,
+            attendanceId: existing.id,
+            userId,
+            userName,
+            userEmail,
+            employeeCode,
+            portalUser,
+            mapped,
+            clock,
+            checkIn: existing.check_in,
+            checkOut: existing.check_out,
+            attendanceStatus: existing.attendance_status,
+          }),
+        };
+      }
     }
 
     const currentMinutes = wallTimeToMinutesSinceMidnight(clock.time_part);

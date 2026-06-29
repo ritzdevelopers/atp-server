@@ -15,6 +15,8 @@ import {
 } from "../services/biometric/fetchLivePunches.js";
 import { fetchBiometricManageAttendance } from "../services/biometric/fetchBiometricManageAttendance.js";
 import { fetchMysqlManageAttendance } from "../services/biometric/fetchMysqlManageAttendance.js";
+import { fetchMysqlLivePunches } from "../services/biometric/fetchMysqlLivePunches.js";
+import { recordLivePunchFeed } from "../services/biometric/recordLivePunchFeed.js";
 
 /** Auth for on-prem sync agent: Bearer token or legacy webhook secret header. */
 function authenticateSyncAgent(req) {
@@ -33,6 +35,43 @@ function authenticateSyncAgent(req) {
 }
 
 /** Cloud (Render): read MySQL synced by office agent. Office: read SQL directly. */
+function shouldUseMysqlForLivePunches() {
+  return shouldUseMysqlForManageAttendance();
+}
+
+async function resolveMappingForCode(orgId, employeeCode) {
+  const [rows] = await pool.promise().query(
+    `SELECT m.user_id, m.employee_name, u.user_name
+     FROM biometric_employee_mappings m
+     LEFT JOIN apt_users u ON u.id = m.user_id
+     WHERE m.org_id = ? AND UPPER(m.biometric_employee_code) = UPPER(?)
+     LIMIT 1`,
+    [orgId, employeeCode],
+  );
+  return rows[0] ?? null;
+}
+
+async function persistWebhookPunchFeed(connection, orgId, rec, clock) {
+  const code = String(
+    rec.biometric_employee_code || rec.employee_code || "",
+  ).trim();
+  if (!code || !clock) return;
+
+  const mapping = await resolveMappingForCode(orgId, code);
+  await recordLivePunchFeed(connection, orgId, {
+    source_table: String(rec.source_table || "sync_agent").trim(),
+    source_row_id: Number(rec.source_row_id) || 0,
+    employee_code: code,
+    punch_at: clock.datetime,
+    punch_date: clock.attendance_date,
+    direction: rec.direction ?? "unknown",
+    device_id: rec.device_id ?? null,
+    employee_name: mapping?.employee_name ?? rec.employee_name ?? null,
+    user_id: mapping?.user_id ?? null,
+    portal_user_name: mapping?.user_name ?? null,
+  });
+}
+
 function shouldUseMysqlForManageAttendance() {
   const source = String(
     process.env.BIOMETRIC_MANAGE_ATTENDANCE_SOURCE || "",
@@ -88,13 +127,31 @@ export const getLivePunchesController = async (req, res) => {
     const sinceId = Number(req.query.since_id ?? 0) || 0;
     const limit = Number(req.query.limit ?? 50) || 50;
 
-    const { punches, latest_device_log_id, source_table } =
-      await fetchLivePunches({ sinceId, limit });
+    const useMysql = shouldUseMysqlForLivePunches();
+    let result;
+    let source = useMysql ? "mysql" : "biometric";
 
+    if (useMysql) {
+      result = await fetchMysqlLivePunches(orgId, { sinceId, limit });
+    } else {
+      try {
+        result = await fetchLivePunches({ sinceId, limit });
+      } catch (mssqlErr) {
+        console.warn(
+          "live-punches MSSQL unavailable, falling back to MySQL feed:",
+          mssqlErr.message,
+        );
+        result = await fetchMysqlLivePunches(orgId, { sinceId, limit });
+        source = "mysql";
+      }
+    }
+
+    const { punches, latest_device_log_id, source_table } = result;
     const enriched = await enrichPunchesWithPortalUsers(orgId, punches);
 
     return res.status(200).json({
       success: true,
+      source,
       org_id: orgId,
       since_id: sinceId,
       latest_device_log_id,
@@ -380,6 +437,7 @@ export const biometricWebhookController = async (req, res) => {
     const connection = await pool.promise().getConnection();
     try {
       await connection.beginTransaction();
+      await persistWebhookPunchFeed(connection, orgId, req.body, clock);
       const outcome = await processBiometricPunch(connection, orgId, {
         source_table: "webhook",
         source_row_id: Date.now(),
@@ -459,6 +517,8 @@ export const biometricWebhookBatchController = async (req, res) => {
 
         const sourceTable = String(rec.source_table || "sync_agent").trim();
         const sourceRowId = Number(rec.source_row_id) || 0;
+
+        await persistWebhookPunchFeed(connection, orgId, rec, clock);
 
         if (sourceRowId > 0) {
           const [existing] = await connection.query(
