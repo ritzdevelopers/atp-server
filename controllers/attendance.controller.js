@@ -279,6 +279,7 @@ export const markAttendanceController = async (req, res) => {
     }
   }
 };
+
 // Check Out Attendance Controller
 // export const markCheckOutAttendanceController = async (req, res) => {
 //   const { org_id, user_date, user_time } = req.body;
