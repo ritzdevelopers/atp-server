@@ -38,6 +38,7 @@ import { startBiometricPoller } from "./services/biometric/biometricPoller.js";
 import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
 import { syncAgent } from "./jobs/sync.agent.js";
+import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 
 dotenv.config();
 
@@ -156,6 +157,8 @@ app.use("/api/biometric-sync-agent", biometricSyncAgentRoutes);
 
 // Map Users 
 app.use("/api/map-users", mapUsersRoutes);
+
+app.use("/api/sync-esl", syncEslRoutes);
 
 socket_server.listen(3000, async () => {
   try {
