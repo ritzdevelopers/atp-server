@@ -26,7 +26,7 @@ import dashboardRoutes from "./routes/dashboard.routes.js";
 import taskManagemenRoutes from "./routes/tasks/taskManagement.route.js";
 import chatApplicationRoutes from "./routes/chats/chats.route.js";
 import biometricRoutes from "./routes/biometric.routes.js";
-
+import mapUsersRoutes from "./routes/map.users.routes.js";
 import { Server } from "socket.io";
 import { createServer } from "http";
 import { register_socket_io } from "./sockets/socker.io.js";
@@ -34,7 +34,11 @@ import { setSocketIo } from "./sockets/io.instance.js";
 import connectMongo from "./db/connect_mongo.js";
 import { ensureBiometricSchema } from "./db/ensureBiometricSchema.js";
 import { startBiometricPoller } from "./services/biometric/biometricPoller.js";
+
+import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
+import { syncAgent } from "./jobs/sync.agent.js";
+import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 
 dotenv.config();
 
@@ -148,12 +152,21 @@ app.use("/api/chat-application", chatApplicationRoutes);
 // Biometric attendance sync
 app.use("/api/biometric", biometricRoutes);
 
+// Biometric attendance sync agent routes
+app.use("/api/biometric-sync-agent", biometricSyncAgentRoutes);
+
+// Map Users 
+app.use("/api/map-users", mapUsersRoutes);
+
+app.use("/api/sync-esl", syncEslRoutes);
+
 socket_server.listen(3000, async () => {
   try {
     await ensureLeaveQuirySchema();
     await connectMongo();
     await ensureBiometricSchema();
     startBiometricPoller();
+    syncAgent();
   } catch (err) {
     console.error("[startup] schema/migration failed:", err.message);
   }

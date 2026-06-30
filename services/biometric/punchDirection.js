@@ -26,15 +26,25 @@ export function timeToMinutes(time) {
 }
 
 function getCheckoutAfterMinutes(shiftEndTime) {
+  const fallback = timeToMinutes(
+    process.env.BIOMETRIC_CHECKOUT_AFTER || "18:30:00",
+  );
   if (shiftEndTime) {
     const fromShift = timeToMinutes(shiftEndTime);
+    if (Number.isFinite(fromShift) && Number.isFinite(fallback)) {
+      return Math.max(fromShift, fallback);
+    }
     if (Number.isFinite(fromShift)) return fromShift;
   }
-  const fallback = process.env.BIOMETRIC_CHECKOUT_AFTER || "18:30:00";
-  return timeToMinutes(fallback);
+  return fallback;
 }
 
-function isAtOrAfterCheckoutThreshold(punchTimePart, shiftEndTime) {
+function punchTimePart(punchAt) {
+  if (!punchAt) return "";
+  return punchAt.includes(" ") ? punchAt.split(" ")[1] : punchAt;
+}
+
+export function isAtOrAfterCheckoutThreshold(punchTimePart, shiftEndTime) {
   const punchMin = wallTimeToMinutesSinceMidnight(punchTimePart);
   const threshold = getCheckoutAfterMinutes(shiftEndTime);
   return (
@@ -92,9 +102,7 @@ export function deriveDayAttendanceFromPunches(punches, shiftEndTime) {
   for (const p of punches) {
     if (!p.punch_at) continue;
 
-    const timePart = p.punch_at.includes(" ")
-      ? p.punch_at.split(" ")[1]
-      : p.punch_at;
+    const timePart = punchTimePart(p.punch_at);
 
     const dir = resolvePunchDirection({
       rawDirection: p.direction,
@@ -106,15 +114,37 @@ export function deriveDayAttendanceFromPunches(punches, shiftEndTime) {
 
     if (dir === "in" && !checkIn) {
       checkIn = p.punch_at;
-    } else if (dir === "out" && checkIn && !checkOut) {
+    } else if (dir === "out" && checkIn) {
       checkOut = p.punch_at;
+    }
+  }
+
+  // Any punch at/after 6:30 (or shift end, whichever is later) is check-out once checked in.
+  if (checkIn) {
+    for (const p of punches) {
+      if (!p.punch_at) continue;
+      const timePart = punchTimePart(p.punch_at);
+      if (isAtOrAfterCheckoutThreshold(timePart, shiftEndTime)) {
+        checkOut = p.punch_at;
+      }
+    }
+  }
+
+  let resolvedCheckIn = checkIn;
+  if (!resolvedCheckIn) {
+    const first = punches.find((p) => p.punch_at);
+    if (first) {
+      const timePart = punchTimePart(first.punch_at);
+      if (!isAtOrAfterCheckoutThreshold(timePart, shiftEndTime)) {
+        resolvedCheckIn = first.punch_at;
+      }
     }
   }
 
   const latest = punches[punches.length - 1];
 
   return {
-    check_in: checkIn ?? punches[0]?.punch_at ?? null,
+    check_in: resolvedCheckIn,
     check_out: checkOut,
     latest_punch_at: latest?.punch_at ?? null,
     latest_punch_direction: latest?.direction ?? null,

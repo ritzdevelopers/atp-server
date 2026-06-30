@@ -1,5 +1,5 @@
 import { pool } from "../../db/connect.js";
-import { isMappedEmployeesOnly } from "./manageAttendanceOptions.js";
+import { isMappedEmployeesOnly, isRmwEmailOnly, isRmwPortalEmail } from "./manageAttendanceOptions.js";
 
 function minutesToHours(minutesValue) {
   if (minutesValue === null || minutesValue === undefined || minutesValue === "") {
@@ -40,6 +40,10 @@ export async function fetchMysqlManageAttendance(
   selectedYear,
 ) {
   const mappedOnly = isMappedEmployeesOnly();
+  const rmwEmailOnly = isRmwEmailOnly();
+  const rmwEmailClause = rmwEmailOnly
+    ? "AND LOWER(emp_info.user_email) LIKE '%@rmw.com'"
+    : "";
 
   const [totalRows] = await pool.promise().query(
     mappedOnly
@@ -49,11 +53,16 @@ export async function fetchMysqlManageAttendance(
          FROM biometric_employee_mappings m
          INNER JOIN apt_org_members om
            ON om.user_id = m.user_id AND om.org_id = m.org_id
-         WHERE m.org_id = ?`
+         INNER JOIN apt_users emp_info ON emp_info.id = m.user_id
+         WHERE m.org_id = ?
+           ${rmwEmailClause}`
       : `SELECT
-           SUM(CASE WHEN is_active = 1 THEN 1 ELSE 0 END) AS active_total,
-           SUM(CASE WHEN is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
-         FROM apt_org_members WHERE org_id = ?`,
+           SUM(CASE WHEN om.is_active = 1 THEN 1 ELSE 0 END) AS active_total,
+           SUM(CASE WHEN om.is_active = 0 THEN 1 ELSE 0 END) AS inactive_total
+         FROM apt_org_members om
+         INNER JOIN apt_users emp_info ON emp_info.id = om.user_id
+         WHERE om.org_id = ?
+           ${rmwEmailClause}`,
     [orgId],
   );
   const activeTotal = Number(totalRows[0]?.active_total || 0);
@@ -92,6 +101,7 @@ export async function fetchMysqlManageAttendance(
            ON apt_roles.id = apt_user_roles.role_id
            AND apt_roles.org_id = m.org_id
          WHERE m.org_id = ?
+           ${rmwEmailClause}
          ORDER BY emp_info.user_name ASC`
       : `SELECT
            emp_info.id AS employee_id,
@@ -124,6 +134,7 @@ export async function fetchMysqlManageAttendance(
          LEFT JOIN biometric_employee_mappings m
            ON m.user_id = emp_info.id AND m.org_id = om.org_id
          WHERE om.org_id = ?
+           ${rmwEmailClause}
          ORDER BY emp_info.user_name ASC`,
     [selectedDate, selectedDate, orgId],
   );
@@ -165,6 +176,7 @@ export async function fetchMysqlManageAttendance(
 
   for (const row of attendanceRows) {
     if (mappedOnly && !row.biometric_employee_code) continue;
+    if (rmwEmailOnly && !isRmwPortalEmail(row.employee_email)) continue;
 
     const rawStatus = row.employee_attendance_status;
     const resolvedStatus = rawStatus ? String(rawStatus) : "absent";

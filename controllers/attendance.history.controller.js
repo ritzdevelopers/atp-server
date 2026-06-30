@@ -593,3 +593,455 @@ export const get_team_member_attendance_history = async (req, res) => {
     });
   }
 };
+
+function isHalfDayStatus(status) {
+  const value = String(status || "").trim().toLowerCase();
+  return value.includes("half");
+}
+
+function isShortLeaveStatus(status) {
+  const value = String(status || "").trim().toLowerCase();
+  return value.includes("short");
+}
+
+function formatDateYmdFromDb(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(d.getTime())) {
+    const s = String(value).trim();
+    return /^\d{4}-\d{2}-\d{2}/.test(s) ? s.slice(0, 10) : null;
+  }
+  return formatLocalDateYmd(d);
+}
+
+function lastDayOfMonth(year, month) {
+  return new Date(year, month, 0).getDate();
+}
+
+function resolveExportDateRange({ mode, month, year, joiningDate }) {
+  const now = new Date();
+  const today = formatLocalDateYmd(now);
+
+  if (mode === "monthly") {
+    const resolvedYear = Number(year) || now.getFullYear();
+    const resolvedMonth = Number(month) || now.getMonth() + 1;
+    const fromDate = `${resolvedYear}-${String(resolvedMonth).padStart(2, "0")}-01`;
+    const monthEnd = `${resolvedYear}-${String(resolvedMonth).padStart(2, "0")}-${String(lastDayOfMonth(resolvedYear, resolvedMonth)).padStart(2, "0")}`;
+    const toDate = monthEnd > today ? today : monthEnd;
+    const monthLabel = new Date(`${fromDate}T12:00:00`).toLocaleDateString(
+      "en-US",
+      { month: "long", year: "numeric" },
+    );
+    return {
+      fromDate,
+      toDate,
+      label: monthLabel,
+      mode: "monthly",
+    };
+  }
+
+  const fromDate = formatDateYmdFromDb(joiningDate) || today;
+  return {
+    fromDate: fromDate > today ? today : fromDate,
+    toDate: today,
+    label: `Full history (${fromDate} to ${today})`,
+    mode: "full",
+  };
+}
+
+const DAY_NAMES = [
+  "Sunday",
+  "Monday",
+  "Tuesday",
+  "Wednesday",
+  "Thursday",
+  "Friday",
+  "Saturday",
+];
+
+const EXPORT_ATTENDANCE_RULES = {
+  late_after: "09:45:00",
+  half_day_checkin_after: "10:30:00",
+  half_day_checkout_until: "17:29:00",
+  short_leave_from: "17:30:00",
+  short_leave_until: "18:15:00",
+  full_day_checkout_after: "18:20:00",
+  min_full_day_hours: 8,
+};
+
+function addDaysToYmd(ymd, days) {
+  const d = new Date(`${ymd}T12:00:00`);
+  d.setDate(d.getDate() + days);
+  return formatLocalDateYmd(d);
+}
+
+function enumerateDatesInclusive(fromDate, toDate) {
+  const dates = [];
+  let current = fromDate;
+  while (current <= toDate) {
+    dates.push(current);
+    current = addDaysToYmd(current, 1);
+  }
+  return dates;
+}
+
+function getDayNameFromYmd(ymd) {
+  const dayIndex = new Date(`${ymd}T12:00:00`).getDay();
+  return DAY_NAMES[dayIndex] ?? "Unknown";
+}
+
+function isSundayYmd(ymd) {
+  return new Date(`${ymd}T12:00:00`).getDay() === 0;
+}
+
+function resolveEffectiveDayStatus({
+  record,
+  date,
+  today,
+  joiningDate,
+  fromMonthStart = false,
+}) {
+  const isSunday = isSundayYmd(date);
+  const isFuture = date > today;
+  const joinedOn = joiningDate || date;
+  const beforeJoining = !fromMonthStart && date < joinedOn;
+
+  if (beforeJoining) {
+    return {
+      attendance_status: "not_joined",
+      is_absent: false,
+      is_weekly_off: false,
+    };
+  }
+
+  if (isFuture) {
+    return {
+      attendance_status: "future",
+      is_absent: false,
+      is_weekly_off: false,
+    };
+  }
+
+  if (isSunday) {
+    return {
+      attendance_status: record?.attendance_status || "weekly_off",
+      is_absent: false,
+      is_weekly_off: true,
+    };
+  }
+
+  if (record?.attendance_status) {
+    const status = String(record.attendance_status).trim();
+    return {
+      attendance_status: status,
+      is_absent: isAbsentStatus(status),
+      is_weekly_off: false,
+    };
+  }
+
+  if (record?.check_in) {
+    return {
+      attendance_status: "present",
+      is_absent: false,
+      is_weekly_off: false,
+    };
+  }
+
+  return {
+    attendance_status: "absent",
+    is_absent: true,
+    is_weekly_off: false,
+  };
+}
+
+function buildCalendarDays(
+  fromDate,
+  toDate,
+  rows,
+  joiningDate,
+  { fromMonthStart = false } = {},
+) {
+  const today = formatLocalDateYmd(new Date());
+  const joinedOn = formatDateYmdFromDb(joiningDate) || fromDate;
+  const rowByDate = new Map(
+    rows.map((row) => [String(row.attendance_date), row]),
+  );
+
+  return enumerateDatesInclusive(fromDate, toDate).map((date) => {
+    const record = rowByDate.get(date) ?? null;
+    const dayName = getDayNameFromYmd(date);
+    const isSunday = isSundayYmd(date);
+    const resolved = resolveEffectiveDayStatus({
+      record,
+      date,
+      today,
+      joiningDate: joinedOn,
+      fromMonthStart,
+    });
+
+    const minutes = Number(record?.working_time ?? 0);
+    const workingMinutes =
+      Number.isFinite(minutes) && minutes > 0
+        ? Math.round(minutes)
+        : Number(record?.working_hours ?? 0) > 0
+          ? Math.round(Number(record.working_hours) * 60)
+          : 0;
+
+    return {
+      date,
+      day_name: dayName,
+      day_short: dayName.slice(0, 3),
+      is_sunday: isSunday,
+      is_weekly_off: resolved.is_weekly_off,
+      is_future: date > today,
+      is_absent: resolved.is_absent,
+      check_in: record?.check_in ?? null,
+      check_out: record?.check_out ?? null,
+      attendance_status: resolved.attendance_status,
+      stored_status: record?.attendance_status ?? null,
+      working_time: workingMinutes > 0 ? workingMinutes : null,
+      working_hours:
+        workingMinutes > 0
+          ? minutesToHours(workingMinutes)
+          : record?.working_hours ?? null,
+    };
+  });
+}
+
+function summarizeCalendarDays(calendarDays) {
+  let presentDays = 0;
+  let lateDays = 0;
+  let absentDays = 0;
+  let halfDayDays = 0;
+  let shortLeaveDays = 0;
+  let onLeaveDays = 0;
+  let weeklyOffDays = 0;
+  let totalWorkingMinutes = 0;
+
+  for (const day of calendarDays) {
+    if (day.is_future || day.attendance_status === "not_joined") continue;
+
+    const status = String(day.attendance_status || "").trim();
+    if (day.is_weekly_off) weeklyOffDays += 1;
+    if (day.is_absent || isAbsentStatus(status)) absentDays += 1;
+    if (isPresentStatus(status) && !isLateStatus(status)) presentDays += 1;
+    if (isLateStatus(status)) lateDays += 1;
+    if (isHalfDayStatus(status)) halfDayDays += 1;
+    if (isShortLeaveStatus(status)) shortLeaveDays += 1;
+    if (isLeaveStatus(status)) onLeaveDays += 1;
+
+    const minutes = Number(day.working_time ?? 0);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      totalWorkingMinutes += minutes;
+    }
+  }
+
+  return {
+    total_days: calendarDays.filter(
+      (day) =>
+        day.attendance_status !== "future" &&
+        day.attendance_status !== "not_joined",
+    ).length,
+    present_days: presentDays,
+    late_days: lateDays,
+    absent_days: absentDays,
+    half_day_days: halfDayDays,
+    short_leave_days: shortLeaveDays,
+    on_leave_days: onLeaveDays,
+    weekly_off_days: weeklyOffDays,
+    total_working_minutes: totalWorkingMinutes,
+    total_working_hours: minutesToHours(totalWorkingMinutes),
+  };
+}
+
+function summarizeAttendanceRows(rows) {
+  let presentDays = 0;
+  let lateDays = 0;
+  let absentDays = 0;
+  let halfDayDays = 0;
+  let shortLeaveDays = 0;
+  let onLeaveDays = 0;
+  let totalWorkingMinutes = 0;
+
+  for (const row of rows) {
+    const status = String(row.attendance_status || "").trim();
+    if (isPresentStatus(status) && !isLateStatus(status)) presentDays += 1;
+    if (isLateStatus(status)) lateDays += 1;
+    if (isAbsentStatus(status)) absentDays += 1;
+    if (isHalfDayStatus(status)) halfDayDays += 1;
+    if (isShortLeaveStatus(status)) shortLeaveDays += 1;
+    if (isLeaveStatus(status)) onLeaveDays += 1;
+
+    const minutes = Number(row.working_time ?? 0);
+    if (Number.isFinite(minutes) && minutes > 0) {
+      totalWorkingMinutes += minutes;
+    } else {
+      const hours = Number(row.working_hours ?? 0);
+      if (Number.isFinite(hours) && hours > 0) {
+        totalWorkingMinutes += Math.round(hours * 60);
+      }
+    }
+  }
+
+  return {
+    total_days: rows.length,
+    present_days: presentDays,
+    late_days: lateDays,
+    absent_days: absentDays,
+    half_day_days: halfDayDays,
+    short_leave_days: shortLeaveDays,
+    on_leave_days: onLeaveDays,
+    total_working_minutes: totalWorkingMinutes,
+    total_working_hours: minutesToHours(totalWorkingMinutes),
+  };
+}
+
+async function fetchEmployeeExportProfile(employee_id, org_id) {
+  const [rows] = await db.promise().query(
+    `
+      SELECT
+        u.id AS user_id,
+        u.user_name,
+        u.user_email,
+        u.user_phone,
+        u.created_at AS user_created_at,
+        om.created_at AS member_since,
+        om.emp_code,
+        COALESCE(r.role_name, 'employee') AS user_role_name
+      FROM apt_users u
+      INNER JOIN apt_org_members om
+        ON om.user_id = u.id AND om.org_id = ?
+      LEFT JOIN apt_user_roles ur
+        ON ur.user_id = u.id AND ur.org_id = ?
+      LEFT JOIN apt_roles r
+        ON r.id = ur.role_id AND r.org_id = ?
+      WHERE u.id = ?
+      LIMIT 1
+    `,
+    [org_id, org_id, org_id, employee_id],
+  );
+  return rows[0] ?? null;
+}
+
+async function fetchAttendanceRowsInRange(employee_id, org_id, fromDate, toDate) {
+  const [rows] = await db.promise().query(
+    `
+      SELECT
+        id AS attendance_id,
+        user_id,
+        user_name,
+        user_email,
+        user_role_name,
+        org_id,
+        DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date,
+        DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+        DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
+        attendance_status,
+        COALESCE(working_time, ROUND(working_hours * 60), 0) AS working_time,
+        working_hours
+      FROM attendance
+      WHERE user_id = ?
+        AND org_id = ?
+        AND attendance_date >= ?
+        AND attendance_date <= ?
+      ORDER BY attendance_date ASC
+    `,
+    [employee_id, org_id, fromDate, toDate],
+  );
+  return rows;
+}
+
+export const export_single_user_attendance_history = async (req, res) => {
+  try {
+    const { user_id } = req.user;
+    const { org_id, employee_id, mode, month, year } = req.query;
+
+    if (!user_id || !org_id || !employee_id) {
+      return res.status(400).json({
+        success: false,
+        message: "org_id and employee_id are required",
+      });
+    }
+
+    const exportMode = String(mode || "monthly").trim().toLowerCase();
+    if (exportMode !== "full" && exportMode !== "monthly") {
+      return res.status(400).json({
+        success: false,
+        message: "mode must be full or monthly",
+      });
+    }
+
+    const [orgMemberRows] = await db
+      .promise()
+      .query(
+        "SELECT id FROM apt_org_members WHERE user_id = ? AND org_id = ? LIMIT 1",
+        [user_id, org_id],
+      );
+    if (orgMemberRows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "Organization member not found",
+      });
+    }
+
+    const profile = await fetchEmployeeExportProfile(employee_id, org_id);
+    if (!profile) {
+      return res.status(404).json({
+        success: false,
+        message: "Employee not found",
+      });
+    }
+
+    const joiningDate = profile.member_since || profile.user_created_at;
+    const period = resolveExportDateRange({
+      mode: exportMode,
+      month,
+      year,
+      joiningDate,
+    });
+
+    const rows = await fetchAttendanceRowsInRange(
+      employee_id,
+      org_id,
+      period.fromDate,
+      period.toDate,
+    );
+
+    const calendar_days = buildCalendarDays(
+      period.fromDate,
+      period.toDate,
+      rows,
+      joiningDate,
+      { fromMonthStart: period.mode === "monthly" },
+    );
+
+    return res.status(200).json({
+      success: true,
+      employee: {
+        user_id: profile.user_id,
+        user_name: profile.user_name,
+        user_email: profile.user_email,
+        user_phone: profile.user_phone || "",
+        user_role_name: profile.user_role_name,
+        emp_code: profile.emp_code || "",
+        joining_date: formatDateYmdFromDb(joiningDate) || period.fromDate,
+      },
+      period: {
+        mode: period.mode,
+        from_date: period.fromDate,
+        to_date: period.toDate,
+        label: period.label,
+      },
+      attendance_rules: EXPORT_ATTENDANCE_RULES,
+      summary: summarizeCalendarDays(calendar_days),
+      calendar_days,
+      rows,
+    });
+  } catch (error) {
+    console.log("Error in export_single_user_attendance_history:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Could not export attendance history",
+    });
+  }
+};
