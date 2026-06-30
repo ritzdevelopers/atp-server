@@ -35,6 +35,7 @@ import connectMongo from "./db/connect_mongo.js";
 import { ensureBiometricSchema } from "./db/ensureBiometricSchema.js";
 import { startBiometricPoller } from "./services/biometric/biometricPoller.js";
 import { getInAppBiometricSyncDecision } from "./config/biometricSyncGate.js";
+import { isCloudDeployment } from "./services/biometric/localBiometricBridge.js";
 
 import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
@@ -53,6 +54,7 @@ const allowedOrigins = [
   "capacitor://localhost",
   "http://localhost",
   "https://localhost",
+  "https://generalisable-ada-saturated.ngrok-free.dev"
 ];
 const io = new Server(socket_server, {
   cors: {
@@ -168,7 +170,7 @@ socket_server.listen(3000, async () => {
     await ensureBiometricSchema();
     const syncDecision = getInAppBiometricSyncDecision();
     if (syncDecision.allowed) {
-      if (syncDecision.mode !== "bridge") {
+      if (syncDecision.mode === "direct" && !isCloudDeployment()) {
         startBiometricPoller();
       }
       syncAgent();

@@ -11,6 +11,7 @@ let healthCache = {
   online: false,
   checkedAt: 0,
 };
+let healthCheckInFlight = null;
 
 function bridgeBaseUrl() {
   return String(process.env.BIOMETRIC_LOCAL_BRIDGE_URL || "")
@@ -33,7 +34,7 @@ function bridgeHeaders() {
 }
 
 function bridgeTimeoutMs() {
-  return Number(process.env.BIOMETRIC_LOCAL_BRIDGE_TIMEOUT_MS || 12_000);
+  return Number(process.env.BIOMETRIC_LOCAL_BRIDGE_TIMEOUT_MS || 5_000);
 }
 
 const OFFICE_BRIDGE_PREFIX = "/api/biometric/office-bridge";
@@ -59,29 +60,39 @@ export async function isLocalBridgeOnline({ force = false } = {}) {
     return healthCache.online;
   }
 
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), bridgeTimeoutMs());
-    const res = await fetch(`${baseUrl}${OFFICE_BRIDGE_PREFIX}/health`, {
-      method: "GET",
-      headers: bridgeHeaders(),
-      signal: controller.signal,
-    });
-    clearTimeout(timer);
+  if (healthCheckInFlight) {
+    return healthCheckInFlight;
+  }
 
-    if (!res.ok) {
+  healthCheckInFlight = (async () => {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), bridgeTimeoutMs());
+      const res = await fetch(`${baseUrl}${OFFICE_BRIDGE_PREFIX}/health`, {
+        method: "GET",
+        headers: bridgeHeaders(),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        healthCache = { online: false, checkedAt: Date.now() };
+        return false;
+      }
+
+      const data = await res.json();
+      const online = data?.online === true || data?.success === true;
+      healthCache = { online, checkedAt: Date.now() };
+      return online;
+    } catch {
       healthCache = { online: false, checkedAt: Date.now() };
       return false;
+    } finally {
+      healthCheckInFlight = null;
     }
+  })();
 
-    const data = await res.json();
-    const online = data?.online === true || data?.success === true;
-    healthCache = { online, checkedAt: Date.now() };
-    return online;
-  } catch {
-    healthCache = { online: false, checkedAt: Date.now() };
-    return false;
-  }
+  return healthCheckInFlight;
 }
 
 async function bridgeFetch(path, query = {}) {

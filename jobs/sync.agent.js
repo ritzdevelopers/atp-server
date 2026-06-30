@@ -12,6 +12,7 @@ import {
 let cronTask = null;
 let warnedDisabled = false;
 let warnedOffline = false;
+let syncInProgress = false;
 
 export const syncAgent = () => {
   const decision = getInAppBiometricSyncDecision();
@@ -29,6 +30,11 @@ export const syncAgent = () => {
   console.log(`[syncAgent] starting AttendanceAll cron (every minute, ${modeLabel})`);
 
   cronTask = nodeCron.schedule("* * * * *", async () => {
+    if (syncInProgress) {
+      console.log("[syncAgent] previous sync still running — skipping this tick");
+      return;
+    }
+
     const readiness = await canRunBiometricSyncNow();
     if (!readiness.ok) {
       if (readiness.reason?.includes("offline")) {
@@ -45,6 +51,7 @@ export const syncAgent = () => {
 
     warnedOffline = false;
 
+    syncInProgress = true;
     try {
       console.log(
         `[syncAgent] syncing via ${readiness.mode === "bridge" ? "local office bridge" : "direct SQL"}...`,
@@ -65,6 +72,8 @@ export const syncAgent = () => {
         return;
       }
       console.error("syncAgent:", error.message || error);
+    } finally {
+      syncInProgress = false;
     }
   });
 };

@@ -478,14 +478,19 @@ export async function syncTodayAttendance(org_id = DEFAULT_ORG_ID) {
   const today = new Date().toISOString().split("T")[0];
   const rows = await fetchAttendanceAllRows({ punchDate: today });
   const formatted = groupAttendanceByEmpCode(rows);
-  const stats = await syncFormattedAttendance(org_id, formatted);
 
-  return {
-    mode: "today",
-    punch_date: today,
-    total_essl_rows: rows.length,
-    ...stats,
-  };
+  const connection = await pool.promise().getConnection();
+  try {
+    const stats = await syncFormattedAttendance(org_id, formatted, { connection });
+    return {
+      mode: "today",
+      punch_date: today,
+      total_essl_rows: rows.length,
+      ...stats,
+    };
+  } finally {
+    connection.release();
+  }
 }
 
 export async function syncAllAttendanceHistory(

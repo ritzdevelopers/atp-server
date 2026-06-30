@@ -326,11 +326,16 @@ export const getBiometricStatusController = async (req, res) => {
     let sqlConnected = false;
     let sourceTables = [];
 
-    try {
-      sqlConnected = await testMssqlConnection();
-      sourceTables = await resolveBiometricSourceTables();
-    } catch (err) {
-      console.error("[biometric] status SQL check failed:", err.message);
+    const skipDirectSql =
+      shouldPreferMysqlBiometric() || isLocalBridgeMode();
+
+    if (!skipDirectSql) {
+      try {
+        sqlConnected = await testMssqlConnection();
+        sourceTables = await resolveBiometricSourceTables();
+      } catch (err) {
+        console.warn("[biometric] status SQL check skipped:", err.message);
+      }
     }
 
     let mappingCount = 0;
