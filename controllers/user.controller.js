@@ -480,6 +480,7 @@ SELECT
   apt_users.id AS id,
   apt_org_members.is_active AS is_active,
   apt_org_members.id AS org_member_id,
+  apt_org_members.emp_code as emp_code,
   apt_user_roles.id AS user_role_assignment_id,
 
   apt_users.user_name,
@@ -3719,6 +3720,7 @@ export const get_single_employee_controller = async (req, res) => {
           shifts.end_time,
           shifts.working_days,
           shifts.is_night_shift,
+          om.emp_code as emp_code,
 
           apt_user_roles.role_id,
           apt_roles.role_name
