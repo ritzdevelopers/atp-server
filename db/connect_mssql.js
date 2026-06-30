@@ -1,5 +1,6 @@
 import sql from "mssql";
 import dotenv from "dotenv";
+import { canReachBiometricSqlHost } from "../config/biometricSyncGate.js";
 
 dotenv.config();
 
@@ -36,6 +37,13 @@ async function sleep(ms) {
 }
 
 async function connectWithRetry() {
+  const reach = canReachBiometricSqlHost();
+  if (!reach.allowed) {
+    const err = new Error(reach.reason);
+    err.code = "BIOMETRIC_SYNC_DISABLED";
+    throw err;
+  }
+
   let lastError;
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
     try {

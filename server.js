@@ -34,6 +34,7 @@ import { setSocketIo } from "./sockets/io.instance.js";
 import connectMongo from "./db/connect_mongo.js";
 import { ensureBiometricSchema } from "./db/ensureBiometricSchema.js";
 import { startBiometricPoller } from "./services/biometric/biometricPoller.js";
+import { getInAppBiometricSyncDecision } from "./config/biometricSyncGate.js";
 
 import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
@@ -165,8 +166,18 @@ socket_server.listen(3000, async () => {
     await ensureLeaveQuirySchema();
     await connectMongo();
     await ensureBiometricSchema();
-    startBiometricPoller();
-    syncAgent();
+    const syncDecision = getInAppBiometricSyncDecision();
+    if (syncDecision.allowed) {
+      if (syncDecision.mode !== "bridge") {
+        startBiometricPoller();
+      }
+      syncAgent();
+      console.log(
+        `[startup] biometric sync: ${syncDecision.mode === "bridge" ? "local bridge" : "direct SQL"}`,
+      );
+    } else {
+      console.log(`[startup] biometric sync skipped: ${syncDecision.reason}`);
+    }
   } catch (err) {
     console.error("[startup] schema/migration failed:", err.message);
   }

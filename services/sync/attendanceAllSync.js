@@ -2,6 +2,10 @@ import { biometricDB } from "../../config/essl.config.js";
 import { pool } from "../../db/connect.js";
 import { formatPunchInIndia } from "../biometric/esslTableResolver.js";
 import { wallTimeToMinutesSinceMidnight } from "../biometric/punchDirection.js";
+import {
+  fetchAttendanceAllFromLocalBridge,
+  isLocalBridgeMode,
+} from "../biometric/localBiometricBridge.js";
 
 const DEFAULT_ORG_ID = Number(process.env.BIOMETRIC_DEFAULT_ORG_ID || 1);
 
@@ -345,6 +349,10 @@ export async function updateAttendanceFromPunches(
 }
 
 export async function fetchAttendanceAllRows({ punchDate, fromDate, toDate } = {}) {
+  if (isLocalBridgeMode()) {
+    return fetchAttendanceAllFromLocalBridge({ punchDate, fromDate, toDate });
+  }
+
   const mssqlPool = await biometricDB();
 
   if (punchDate) {
