@@ -102,3 +102,69 @@ function mapFeedRow(row) {
     portal_user_name: row.portal_user_name ?? null,
   };
 }
+
+/** Today's attendance for one employee from MySQL (production fallback). */
+export async function fetchMysqlEmployeeToday(orgId, userId, employeeCode) {
+  const [attendanceRows] = await pool.promise().query(
+    `SELECT
+       DATE_FORMAT(attendance_date, '%Y-%m-%d') AS attendance_date,
+       DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
+       DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out
+     FROM attendance
+     WHERE org_id = ? AND user_id = ? AND attendance_date = CURDATE()
+     LIMIT 1`,
+    [orgId, userId],
+  );
+
+  if (attendanceRows.length > 0) {
+    const row = attendanceRows[0];
+    return {
+      employee_code: String(employeeCode ?? "").trim(),
+      attendance_date: row.attendance_date,
+      check_in: row.check_in,
+      check_out: row.check_out,
+      latest_punch_at: row.check_out || row.check_in,
+      latest_punch_direction: row.check_out ? "out" : row.check_in ? "in" : null,
+      punch_count: row.check_in && row.check_out ? 2 : row.check_in ? 1 : 0,
+      punches: [],
+      source: "mysql_attendance",
+    };
+  }
+
+  const [feedRows] = await pool.promise().query(
+    `SELECT
+       device_log_id,
+       employee_code,
+       employee_name,
+       DATE_FORMAT(punch_at, '%Y-%m-%d %H:%i:%s') AS punch_at,
+       DATE_FORMAT(punch_date, '%Y-%m-%d') AS punch_date,
+       direction
+     FROM biometric_live_punch_feed
+     WHERE org_id = ?
+       AND UPPER(employee_code) = UPPER(?)
+       AND punch_date = CURDATE()
+     ORDER BY device_log_id ASC`,
+    [orgId, employeeCode],
+  );
+
+  if (!feedRows.length) return null;
+
+  const punches = feedRows.map(mapFeedRow);
+  const first = punches[0];
+  const last = punches[punches.length - 1];
+  const checkIn = punches.find((p) => p.direction === "in")?.punch_at ?? first.punch_at;
+  const checkOut = [...punches].reverse().find((p) => p.direction === "out")?.punch_at ?? null;
+
+  return {
+    employee_code: String(employeeCode ?? "").trim(),
+    employee_name: first.employee_name ?? null,
+    attendance_date: first.punch_date,
+    check_in: checkIn,
+    check_out: checkOut,
+    latest_punch_at: last.punch_at,
+    latest_punch_direction: last.direction,
+    punch_count: punches.length,
+    punches,
+    source: "mysql_feed",
+  };
+}

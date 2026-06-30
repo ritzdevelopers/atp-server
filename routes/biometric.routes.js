@@ -15,7 +15,11 @@ import {
   getBiometricManageAttendanceController,
 } from "../controllers/biometric.controller.js";
 
+import officeBridgeRoutes from "./biometric/officeBridge.routes.js";
+
 const router = express.Router();
+
+router.use("/office-bridge", officeBridgeRoutes);
 
 router.post("/webhook", biometricWebhookController);
 router.post("/webhook/batch", biometricWebhookBatchController);
