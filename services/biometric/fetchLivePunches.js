@@ -1,5 +1,9 @@
 import getMssqlPool from "../../db/connect_mssql.js";
 import {
+  shouldUseDirectBiometricSql,
+  tryGetMssqlPool,
+} from "./biometricConnection.js";
+import {
   formatPunchInIndia,
   resolveBiometricSourceTables,
 } from "./esslTableResolver.js";
@@ -28,7 +32,8 @@ async function getCurrentMonthTable() {
 }
 
 async function maxDeviceLogId(table) {
-  const pool = await getMssqlPool();
+  const pool = await tryGetMssqlPool();
+  if (!pool) return 0;
   const safeTable = table.replace(/]/g, "]]");
   const result = await pool.request().query(`
     SELECT MAX(DeviceLogId) AS maxId FROM [${safeTable}]
@@ -42,7 +47,12 @@ async function maxDeviceLogId(table) {
  * - sinceId > 0 → only new punches after that id (current month table)
  */
 export async function fetchLivePunches({ sinceId = 0, limit = 50 } = {}) {
-  const pool = await getMssqlPool();
+  const pool = await tryGetMssqlPool();
+  if (!pool) {
+    const err = new Error("Direct biometric SQL is not available");
+    err.code = "BIOMETRIC_UNAVAILABLE";
+    throw err;
+  }
   const table = await getCurrentMonthTable();
   const safeTable = table.replace(/]/g, "]]");
   const batch = Math.min(Math.max(Number(limit) || 50, 1), 200);
@@ -110,7 +120,12 @@ export async function fetchEmployeeTodayFromDevice(
   const code = String(employeeCode ?? "").trim();
   if (!code) return null;
 
-  const pool = await getMssqlPool();
+  const pool = await tryGetMssqlPool();
+  if (!pool) {
+    const err = new Error("Direct biometric SQL is not available");
+    err.code = "BIOMETRIC_UNAVAILABLE";
+    throw err;
+  }
   const table = await getCurrentMonthTable();
   const safeTable = table.replace(/]/g, "]]");
   const safeCode = code.replace(/'/g, "''");

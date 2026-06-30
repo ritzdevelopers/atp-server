@@ -15,7 +15,16 @@ import {
 } from "../services/biometric/fetchLivePunches.js";
 import { fetchBiometricManageAttendance } from "../services/biometric/fetchBiometricManageAttendance.js";
 import { fetchMysqlManageAttendance } from "../services/biometric/fetchMysqlManageAttendance.js";
-import { fetchMysqlLivePunches } from "../services/biometric/fetchMysqlLivePunches.js";
+import {
+  fetchMysqlLivePunches,
+  fetchMysqlEmployeeToday,
+} from "../services/biometric/fetchMysqlLivePunches.js";
+import { fetchEmployeeTodayFromLocalBridge } from "../services/biometric/localBiometricBridge.js";
+import {
+  isLocalBridgeMode,
+  isLocalBridgeOnline,
+} from "../services/biometric/localBiometricBridge.js";
+import { shouldPreferMysqlBiometric } from "../services/biometric/biometricConnection.js";
 import { recordLivePunchFeed } from "../services/biometric/recordLivePunchFeed.js";
 
 /** Auth for on-prem sync agent: Bearer token or legacy webhook secret header. */
@@ -34,9 +43,13 @@ function authenticateSyncAgent(req) {
   return bearer === expected || headerSecret === expected;
 }
 
-/** Cloud (Render): read MySQL synced by office agent. Office: read SQL directly. */
+/** Cloud: MySQL / office bridge. Office LAN: direct SQL when available. */
 function shouldUseMysqlForLivePunches() {
-  return shouldUseMysqlForManageAttendance();
+  return shouldPreferMysqlBiometric();
+}
+
+function shouldUseMysqlForManageAttendance() {
+  return shouldPreferMysqlBiometric();
 }
 
 async function resolveMappingForCode(orgId, employeeCode) {
@@ -70,18 +83,6 @@ async function persistWebhookPunchFeed(connection, orgId, rec, clock) {
     user_id: mapping?.user_id ?? null,
     portal_user_name: mapping?.user_name ?? null,
   });
-}
-
-function shouldUseMysqlForManageAttendance() {
-  const source = String(
-    process.env.BIOMETRIC_MANAGE_ATTENDANCE_SOURCE || "",
-  ).toLowerCase();
-  if (source === "mysql") return true;
-  if (source === "sql" || source === "mssql") return false;
-  return (
-    String(process.env.BIOMETRIC_SYNC_ENABLED || "false") !== "true" ||
-    String(process.env.BIOMETRIC_RUN_SYNC_IN_APP || "true") !== "true"
-  );
 }
 
 async function enrichPunchesWithPortalUsers(orgId, punches) {
@@ -210,7 +211,48 @@ export const getMyLiveAttendanceController = async (req, res) => {
     );
     const shiftEndTime = shiftRow[0]?.end_time ?? null;
 
-    const device = await fetchEmployeeTodayFromDevice(code, { shiftEndTime });
+    let device = null;
+    let source = "mysql";
+    let bridgeOnline = false;
+    let waitingForLocal = false;
+
+    if (shouldUseMysqlForLivePunches()) {
+      if (isLocalBridgeMode()) {
+        bridgeOnline = await isLocalBridgeOnline();
+        if (bridgeOnline) {
+          try {
+            device = await fetchEmployeeTodayFromLocalBridge(code, {
+              shiftEndTime,
+            });
+            source = "office_bridge";
+          } catch (bridgeErr) {
+            console.warn(
+              "my-live-attendance bridge fetch failed:",
+              bridgeErr.message,
+            );
+          }
+        } else {
+          waitingForLocal = true;
+        }
+      }
+
+      if (!device) {
+        device = await fetchMysqlEmployeeToday(orgId, userId, code);
+        source = bridgeOnline ? "mysql_fallback" : "mysql";
+      }
+    } else {
+      try {
+        device = await fetchEmployeeTodayFromDevice(code, { shiftEndTime });
+        source = "biometric_sql";
+      } catch (mssqlErr) {
+        console.warn(
+          "my-live-attendance MSSQL unavailable, using MySQL:",
+          mssqlErr.message,
+        );
+        device = await fetchMysqlEmployeeToday(orgId, userId, code);
+        source = "mysql_fallback";
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -218,13 +260,23 @@ export const getMyLiveAttendanceController = async (req, res) => {
       user_id: userId,
       org_id: orgId,
       biometric_employee_code: code,
+      source,
+      bridge_online: bridgeOnline,
+      waiting_for_local: waitingForLocal,
       data: device,
       fetched_at: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("getMyLiveAttendanceController:", error);
-    return res.status(500).json({
-      message: error.message || "Could not fetch live attendance",
+    console.error("getMyLiveAttendanceController:", error.message || error);
+    return res.status(200).json({
+      success: true,
+      mapped: true,
+      source: "unavailable",
+      bridge_online: false,
+      waiting_for_local: isLocalBridgeMode(),
+      message: "Live biometric data is temporarily unavailable",
+      data: null,
+      fetched_at: new Date().toISOString(),
     });
   }
 };
@@ -235,6 +287,15 @@ export const getMyLiveAttendanceController = async (req, res) => {
  */
 export const getLiveCursorController = async (_req, res) => {
   try {
+    if (shouldUseMysqlForLivePunches()) {
+      return res.status(200).json({
+        success: true,
+        latest_device_log_id: 0,
+        source: "mysql",
+        fetched_at: new Date().toISOString(),
+      });
+    }
+
     const latest_device_log_id = await fetchLatestDeviceLogId();
     return res.status(200).json({
       success: true,
@@ -242,8 +303,13 @@ export const getLiveCursorController = async (_req, res) => {
       fetched_at: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("getLiveCursorController:", error);
-    return res.status(500).json({ message: "Could not read device cursor" });
+    console.warn("getLiveCursorController:", error.message);
+    return res.status(200).json({
+      success: true,
+      latest_device_log_id: 0,
+      source: "unavailable",
+      fetched_at: new Date().toISOString(),
+    });
   }
 };
 

@@ -13,7 +13,9 @@ let healthCache = {
 };
 
 function bridgeBaseUrl() {
-  return String(process.env.BIOMETRIC_LOCAL_BRIDGE_URL || "").trim().replace(/\/$/, "");
+  return String(process.env.BIOMETRIC_LOCAL_BRIDGE_URL || "")
+    .trim()
+    .replace(/\/$/, "");
 }
 
 function bridgeSecret() {
@@ -26,9 +28,7 @@ function bridgeSecret() {
 function bridgeHeaders() {
   const headers = { Accept: "application/json" };
   const secret = bridgeSecret();
-  if (secret) {
-    headers["x-bridge-secret"] = secret;
-  }
+  if (secret) headers["x-bridge-secret"] = secret;
   return headers;
 }
 
@@ -36,11 +36,15 @@ function bridgeTimeoutMs() {
   return Number(process.env.BIOMETRIC_LOCAL_BRIDGE_TIMEOUT_MS || 12_000);
 }
 
-/** Production cloud should pull biometric data through the office PC bridge. */
+const OFFICE_BRIDGE_PREFIX = "/api/biometric/office-bridge";
+
+/** Production cloud + office tunnel URL configured → use bridge, not direct LAN SQL. */
 export function isLocalBridgeMode() {
   if (!isCloudDeployment()) return false;
-  return Boolean(bridgeBaseUrl());
+  return Boolean(String(process.env.BIOMETRIC_LOCAL_BRIDGE_URL || "").trim());
 }
+
+export { isCloudDeployment };
 
 export function getLocalBridgeUrl() {
   return bridgeBaseUrl();
@@ -58,8 +62,7 @@ export async function isLocalBridgeOnline({ force = false } = {}) {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), bridgeTimeoutMs());
-
-    const res = await fetch(`${baseUrl}/bridge/health`, {
+    const res = await fetch(`${baseUrl}${OFFICE_BRIDGE_PREFIX}/health`, {
       method: "GET",
       headers: bridgeHeaders(),
       signal: controller.signal,
@@ -81,11 +84,7 @@ export async function isLocalBridgeOnline({ force = false } = {}) {
   }
 }
 
-export async function fetchAttendanceAllFromLocalBridge({
-  punchDate,
-  fromDate,
-  toDate,
-} = {}) {
+async function bridgeFetch(path, query = {}) {
   const baseUrl = bridgeBaseUrl();
   if (!baseUrl) {
     const err = new Error("BIOMETRIC_LOCAL_BRIDGE_URL is not configured");
@@ -96,22 +95,21 @@ export async function fetchAttendanceAllFromLocalBridge({
   const online = await isLocalBridgeOnline();
   if (!online) {
     const err = new Error(
-      "Local biometric bridge is offline — start attendance-sync-agent on your office PC",
+      "Local office server is offline — waiting for local machine to start",
     );
     err.code = "LOCAL_BRIDGE_OFFLINE";
     throw err;
   }
 
-  const params = new URLSearchParams();
-  if (punchDate) params.set("punchDate", punchDate);
-  if (fromDate) params.set("fromDate", fromDate);
-  if (toDate) params.set("toDate", toDate);
+  const params = new URLSearchParams(query);
+  const qs = params.toString();
+  const url = `${baseUrl}${OFFICE_BRIDGE_PREFIX}${path}${qs ? `?${qs}` : ""}`;
 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), bridgeTimeoutMs());
 
   try {
-    const res = await fetch(`${baseUrl}/bridge/attendance-all?${params.toString()}`, {
+    const res = await fetch(url, {
       method: "GET",
       headers: bridgeHeaders(),
       signal: controller.signal,
@@ -120,17 +118,39 @@ export async function fetchAttendanceAllFromLocalBridge({
 
     const data = await res.json();
     if (!res.ok || data?.success === false) {
-      const err = new Error(data?.message || "Local bridge attendance fetch failed");
+      const err = new Error(data?.message || "Office bridge request failed");
       err.code = "LOCAL_BRIDGE_FETCH_FAILED";
       throw err;
     }
-
-    return Array.isArray(data.rows) ? data.rows : [];
+    return data;
   } catch (error) {
     clearTimeout(timer);
     if (error?.code) throw error;
-    const err = new Error(error.message || "Local bridge request failed");
+    const err = new Error(error.message || "Office bridge request failed");
     err.code = "LOCAL_BRIDGE_FETCH_FAILED";
     throw err;
   }
+}
+
+export async function fetchAttendanceAllFromLocalBridge({
+  punchDate,
+  fromDate,
+  toDate,
+} = {}) {
+  const data = await bridgeFetch("/attendance-all", {
+    punchDate: punchDate || "",
+    fromDate: fromDate || "",
+    toDate: toDate || "",
+  });
+  return Array.isArray(data.rows) ? data.rows : [];
+}
+
+export async function fetchEmployeeTodayFromLocalBridge(
+  employeeCode,
+  { shiftEndTime = null } = {},
+) {
+  const code = encodeURIComponent(String(employeeCode || "").trim());
+  const query = shiftEndTime ? { shift_end_time: shiftEndTime } : {};
+  const data = await bridgeFetch(`/employee-today/${code}`, query);
+  return data.data ?? null;
 }
