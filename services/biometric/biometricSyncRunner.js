@@ -1,4 +1,4 @@
-import getMssqlPool from "../../db/connect_mssql.js";
+import { tryGetMssqlPool } from "./biometricConnection.js";
 import { pool as mysqlPool } from "../../db/connect.js";
 import {
   mapBiometricRow,
@@ -259,7 +259,10 @@ export async function runBiometricSync(orgIdOverride = null) {
   let mysqlConnection;
 
   try {
-    const mssqlPool = await getMssqlPool();
+    const mssqlPool = await tryGetMssqlPool();
+    if (!mssqlPool) {
+      return { ok: false, message: "Direct biometric SQL is not available" };
+    }
     mysqlConnection = await mysqlPool.promise().getConnection();
     const tables = await resolveBiometricSourceTables();
 

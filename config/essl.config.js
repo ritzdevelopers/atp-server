@@ -1,6 +1,12 @@
-import getMssqlPool from "../db/connect_mssql.js";
+import { tryGetMssqlPool } from "../services/biometric/biometricConnection.js";
 
 /** Shared SQL Server pool for eSSL / AttendanceAll reads. */
 export async function biometricDB() {
-  return getMssqlPool();
+  const pool = await tryGetMssqlPool();
+  if (!pool) {
+    const err = new Error("Direct biometric SQL is not available");
+    err.code = "BIOMETRIC_UNAVAILABLE";
+    throw err;
+  }
+  return pool;
 }

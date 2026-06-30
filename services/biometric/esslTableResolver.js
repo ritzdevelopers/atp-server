@@ -1,4 +1,4 @@
-import getMssqlPool from "../../db/connect_mssql.js";
+import { tryGetMssqlPool } from "./biometricConnection.js";
 import { parseRawDirection } from "./punchDirection.js";
 
 function getRowValue(row, ...keys) {
@@ -170,7 +170,8 @@ export async function resolveBiometricSourceTables() {
 
   if (!dynamic) return [baseName];
 
-  const pool = await getMssqlPool();
+  const pool = await tryGetMssqlPool();
+  if (!pool) return [baseName];
   const likePattern = `${baseName.replace(/'/g, "''")}_%`;
 
   const result = await pool.request().query(`

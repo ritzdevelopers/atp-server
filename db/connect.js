@@ -87,8 +87,9 @@ export const pool = mysql.createPool({
   ...connectionConfig,
   ...sharedMysqlOptions,
   waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0,
+  connectionLimit: Number(process.env.DB_POOL_LIMIT || 25),
+  // queueLimit 0 = unlimited queue (requests hang forever when pool is full).
+  queueLimit: Number(process.env.DB_POOL_QUEUE_LIMIT || 50),
 });
 
 pool.on("connection", (connection) => {

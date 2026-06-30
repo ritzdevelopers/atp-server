@@ -6,9 +6,12 @@ dotenv.config();
 
 let pool = null;
 let connecting = null;
+let sqlBlockedUntil = 0;
+let lastBlockReason = "";
 
 const MAX_RETRIES = Number(process.env.BIOMETRIC_DB_MAX_RETRIES || 5);
 const RETRY_DELAY_MS = Number(process.env.BIOMETRIC_DB_RETRY_DELAY_MS || 3_000);
+const BLOCK_TTL_MS = Number(process.env.BIOMETRIC_DB_BLOCK_TTL_MS || 60_000);
 
 function buildMssqlConfig() {
   return {
@@ -39,6 +42,8 @@ async function sleep(ms) {
 async function connectWithRetry() {
   const reach = canReachBiometricSqlHost();
   if (!reach.allowed) {
+    lastBlockReason = reach.reason;
+    sqlBlockedUntil = Date.now() + BLOCK_TTL_MS;
     const err = new Error(reach.reason);
     err.code = "BIOMETRIC_SYNC_DISABLED";
     throw err;
@@ -64,7 +69,19 @@ async function connectWithRetry() {
   throw lastError;
 }
 
+function throwCachedUnavailable() {
+  const err = new Error(
+    lastBlockReason || "Biometric SQL Server is not reachable in this environment",
+  );
+  err.code = "BIOMETRIC_SYNC_DISABLED";
+  throw err;
+}
+
 export default async function getMssqlPool() {
+  if (Date.now() < sqlBlockedUntil) {
+    throwCachedUnavailable();
+  }
+
   if (pool?.connected) return pool;
 
   if (!connecting) {
@@ -76,6 +93,13 @@ export default async function getMssqlPool() {
           pool = null;
         });
         return pool;
+      })
+      .catch((err) => {
+        if (err?.code === "BIOMETRIC_SYNC_DISABLED") {
+          sqlBlockedUntil = Date.now() + BLOCK_TTL_MS;
+          lastBlockReason = err.message;
+        }
+        throw err;
       })
       .finally(() => {
         connecting = null;

@@ -7,19 +7,24 @@ import {
 let timer = null;
 let backoffMs = 0;
 let warnedDisabled = false;
+let tickInProgress = false;
 
 const BASE_INTERVAL = Number(process.env.BIOMETRIC_SYNC_INTERVAL_MS || 5000);
 const MAX_BACKOFF = Number(process.env.BIOMETRIC_SYNC_MAX_BACKOFF_MS || 60_000);
 
 async function tick() {
   if (!shouldRunInAppBiometricSync()) return;
+  if (tickInProgress) return;
 
+  tickInProgress = true;
   try {
     await runBiometricSync();
     backoffMs = 0;
   } catch (err) {
     console.error("[biometric] poller error:", err.message);
     backoffMs = backoffMs === 0 ? BASE_INTERVAL : Math.min(backoffMs * 2, MAX_BACKOFF);
+  } finally {
+    tickInProgress = false;
   }
 }
 
