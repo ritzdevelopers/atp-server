@@ -1,13 +1,18 @@
 import { runBiometricSync } from "./biometricSyncRunner.js";
+import {
+  getInAppBiometricSyncDecision,
+  shouldRunInAppBiometricSync,
+} from "../../config/biometricSyncGate.js";
 
 let timer = null;
 let backoffMs = 0;
+let warnedDisabled = false;
 
 const BASE_INTERVAL = Number(process.env.BIOMETRIC_SYNC_INTERVAL_MS || 5000);
 const MAX_BACKOFF = Number(process.env.BIOMETRIC_SYNC_MAX_BACKOFF_MS || 60_000);
 
 async function tick() {
-  if (String(process.env.BIOMETRIC_SYNC_ENABLED || "false") !== "true") return;
+  if (!shouldRunInAppBiometricSync()) return;
 
   try {
     await runBiometricSync();
@@ -19,13 +24,12 @@ async function tick() {
 }
 
 export function startBiometricPoller() {
-  if (String(process.env.BIOMETRIC_SYNC_ENABLED || "false") !== "true") {
-    console.log("[biometric] sync disabled (BIOMETRIC_SYNC_ENABLED != true)");
-    return;
-  }
-
-  if (String(process.env.BIOMETRIC_RUN_SYNC_IN_APP || "true") !== "true") {
-    console.log("[biometric] in-app poller disabled (use sync-worker.js)");
+  const decision = getInAppBiometricSyncDecision();
+  if (!decision.allowed) {
+    if (!warnedDisabled) {
+      warnedDisabled = true;
+      console.log(`[biometric] sync disabled: ${decision.reason}`);
+    }
     return;
   }
 
