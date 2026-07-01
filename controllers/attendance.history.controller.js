@@ -27,6 +27,7 @@ async function fetchSingleUserAttendanceRows(
       user_info.user_name,
       user_info.user_email,
       COALESCE(apt_roles.role_name, user_info.user_role_name) AS user_role_name,
+      om.emp_code,
       user_info.id AS attendance_id,
       DATE_FORMAT(user_info.attendance_date, '%Y-%m-%d') AS attendance_date,
       DATE_FORMAT(user_info.check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
@@ -37,6 +38,9 @@ async function fetchSingleUserAttendanceRows(
       apt_users.created_at AS joining_date
     FROM attendance AS user_info
     INNER JOIN apt_users ON user_info.user_id = apt_users.id
+    INNER JOIN apt_org_members om
+      ON om.user_id = user_info.user_id
+      AND om.org_id = user_info.org_id
     LEFT JOIN apt_user_roles
       ON apt_user_roles.user_id = apt_users.id
       AND apt_user_roles.org_id = user_info.org_id
@@ -62,6 +66,7 @@ async function fetchSingleUserAttendanceRows(
           apt_users.user_email,
           apt_users.user_phone,
           apt_users.created_at AS joining_date,
+          apt_org_members.emp_code,
           COALESCE(apt_roles.role_name, '') AS user_role_name
         FROM apt_users
         INNER JOIN apt_org_members
@@ -694,6 +699,11 @@ function isSundayYmd(ymd) {
   return new Date(`${ymd}T12:00:00`).getDay() === 0;
 }
 
+function isWeekendYmd(ymd) {
+  const dayIndex = new Date(`${ymd}T12:00:00`).getDay();
+  return dayIndex === 0 || dayIndex === 6;
+}
+
 function resolveEffectiveDayStatus({
   record,
   date,
@@ -701,7 +711,7 @@ function resolveEffectiveDayStatus({
   joiningDate,
   fromMonthStart = false,
 }) {
-  const isSunday = isSundayYmd(date);
+  const isWeekend = isWeekendYmd(date);
   const isFuture = date > today;
   const joinedOn = joiningDate || date;
   const beforeJoining = !fromMonthStart && date < joinedOn;
@@ -722,11 +732,22 @@ function resolveEffectiveDayStatus({
     };
   }
 
-  if (isSunday) {
+  if (isWeekend && !record?.check_in && !record?.attendance_status) {
     return {
-      attendance_status: record?.attendance_status || "weekly_off",
+      attendance_status: "weekly_off",
       is_absent: false,
       is_weekly_off: true,
+    };
+  }
+
+  if (isWeekend && (record?.check_in || record?.attendance_status)) {
+    const status = record?.attendance_status
+      ? String(record.attendance_status).trim()
+      : "present";
+    return {
+      attendance_status: status,
+      is_absent: isAbsentStatus(status),
+      is_weekly_off: false,
     };
   }
 
@@ -771,6 +792,7 @@ function buildCalendarDays(
     const record = rowByDate.get(date) ?? null;
     const dayName = getDayNameFromYmd(date);
     const isSunday = isSundayYmd(date);
+    const isWeekend = isWeekendYmd(date);
     const resolved = resolveEffectiveDayStatus({
       record,
       date,
@@ -792,6 +814,7 @@ function buildCalendarDays(
       day_name: dayName,
       day_short: dayName.slice(0, 3),
       is_sunday: isSunday,
+      is_weekend: isWeekend,
       is_weekly_off: resolved.is_weekly_off,
       is_future: date > today,
       is_absent: resolved.is_absent,

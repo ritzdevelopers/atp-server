@@ -199,6 +199,8 @@ export async function updateAttendanceFromPunches(
 
   if (!punches.length) return { skipped: true, reason: "invalid_punches" };
 
+  punches.sort((a, b) => new Date(a.datetime) - new Date(b.datetime));
+
   const firstPunch = punches[0];
   const lastPunch = punches[punches.length - 1];
   const attendance_date = firstPunch.attendance_date;

@@ -6,7 +6,11 @@ import {
   parseRawDirection,
   wallTimeToMinutesSinceMidnight,
 } from "./punchDirection.js";
-import { isMappedEmployeesOnly, isRmwEmailOnly, isRmwPortalEmail } from "./manageAttendanceOptions.js";
+import { isRmwEmailOnly, isRmwPortalEmail } from "./manageAttendanceOptions.js";
+import {
+  countPortalManageAttendanceTotals,
+  fetchPortalManageAttendanceMembers,
+} from "./portalManageAttendanceMembers.js";
 
 function resolveTableForDate(dateStr) {
   const base = process.env.BIOMETRIC_TABLE_NAME || "DeviceLogs";
@@ -76,8 +80,8 @@ function isJunkBiometricEmployee(emp) {
 }
 
 /**
- * Manage-attendance list: all employees from biometric SQL Server,
- * merged with portal user_id (mapping), live punches, and MySQL period stats.
+ * Manage-attendance list: active portal members with emp_code,
+ * merged with live biometric punches and MySQL period stats.
  */
 export async function fetchBiometricManageAttendance(
   orgId,
@@ -98,8 +102,15 @@ export async function fetchBiometricManageAttendance(
       Status
     FROM Employees
     WHERE RecordStatus = 1
-    ORDER BY EmployeeName ASC
   `);
+
+  const deviceEmpByCode = new Map();
+  for (const emp of empResult.recordset) {
+    if (isJunkBiometricEmployee(emp)) continue;
+    const codeKey = String(emp.EmployeeCode ?? "").trim().toUpperCase();
+    if (!codeKey) continue;
+    deviceEmpByCode.set(codeKey, emp);
+  }
 
   const punchesByCode = new Map();
   const logTable = resolveTableForDate(selectedDate);
@@ -152,12 +163,13 @@ export async function fetchBiometricManageAttendance(
     [orgId],
   );
 
-  const mappingByCode = new Map(
-    mappings.map((m) => [
-      String(m.biometric_employee_code).toUpperCase(),
-      m,
-    ]),
+  const mappingByUserId = new Map(
+    mappings.map((m) => [Number(m.user_id), m]),
   );
+
+  const { activeTotal, inactiveTotal } =
+    await countPortalManageAttendanceTotals(orgId);
+  const portalMembers = await fetchPortalManageAttendanceMembers(orgId);
 
   const [periodStatsRows] = await pool.promise().query(
     `SELECT
@@ -206,67 +218,49 @@ export async function fetchBiometricManageAttendance(
   let selectedDateAbsent = 0;
   let checkInOnTime = 0;
   let checkInLate = 0;
-  let activeTotal = 0;
-  let inactiveTotal = 0;
 
   const employeesAttendanceData = [];
-  const mappedOnly = isMappedEmployeesOnly();
   const rmwEmailOnly = isRmwEmailOnly();
 
-  for (const emp of empResult.recordset) {
-    if (isJunkBiometricEmployee(emp)) continue;
+  for (const member of portalMembers) {
+    const empCode = String(member.emp_code || "").trim();
+    if (!empCode) continue;
 
-    const code = String(emp.EmployeeCode ?? "").trim();
-    const codeKey = code.toUpperCase();
-    const mapping = mappingByCode.get(codeKey);
+    const codeKey = empCode.toUpperCase();
+    const userId = Number(member.user_id);
+    const mapping = mappingByUserId.get(userId) ?? null;
+    const deviceEmp = deviceEmpByCode.get(codeKey) ?? null;
 
-    if (mappedOnly && !mapping) continue;
-    if (rmwEmailOnly) {
-      const portalEmail = mapping?.user_email || "";
-      if (!isRmwPortalEmail(portalEmail)) continue;
-    }
+    if (rmwEmailOnly && !isRmwPortalEmail(member.employee_email)) continue;
 
-    const userId = mapping?.user_id != null ? Number(mapping.user_id) : null;
     const punches = punchesByCode.get(codeKey) ?? [];
-    const shiftEnd = mapping?.shift_end_time ?? null;
+    const shiftEnd = member.shift_end_time ?? mapping?.shift_end_time ?? null;
+    const lateAfter = member.late_after ?? mapping?.late_after ?? null;
     const derived = deriveDayAttendanceFromPunches(punches, shiftEnd);
-    const mysqlDay = userId != null ? mysqlDayByUser.get(userId) : null;
+    const mysqlDay = mysqlDayByUser.get(userId) ?? null;
 
-    // Machine DB is the source of truth for punch times shown on manage-attendance.
     const machineCheckIn = derived.check_in || "";
     const machineCheckOut = derived.check_out || "";
     const checkIn = machineCheckIn || mysqlDay?.check_in || "";
     const checkOut = machineCheckOut || mysqlDay?.check_out || "";
 
     const resolvedStatus = machineCheckIn
-      ? deriveAttendanceStatus(machineCheckIn, mapping?.late_after)
+      ? deriveAttendanceStatus(machineCheckIn, lateAfter)
       : mysqlDay?.attendance_status
         ? String(mysqlDay.attendance_status)
-        : deriveAttendanceStatus(checkIn, mapping?.late_after);
+        : deriveAttendanceStatus(checkIn, lateAfter);
 
-    const isDeviceWorking =
-      String(emp.Status ?? "").trim().toLowerCase() === "working";
-    const isActiveEmployee =
-      mapping != null
-        ? Number(mapping.org_member_is_active) === 1
-        : isDeviceWorking;
-
-    if (isActiveEmployee) {
-      activeTotal += 1;
-      if (
-        isPresentStatus(resolvedStatus) ||
-        (isLateStatus(resolvedStatus) && !isAbsentStatus(resolvedStatus))
-      ) {
-        selectedDatePresent += 1;
-      }
-      if (!checkIn || isAbsentStatus(resolvedStatus)) {
-        selectedDateAbsent += 1;
-      }
-      if (isPresentStatus(resolvedStatus)) checkInOnTime += 1;
-      if (isLateStatus(resolvedStatus)) checkInLate += 1;
-    } else {
-      inactiveTotal += 1;
+    if (
+      isPresentStatus(resolvedStatus) ||
+      (isLateStatus(resolvedStatus) && !isAbsentStatus(resolvedStatus))
+    ) {
+      selectedDatePresent += 1;
     }
+    if (!checkIn || isAbsentStatus(resolvedStatus)) {
+      selectedDateAbsent += 1;
+    }
+    if (isPresentStatus(resolvedStatus)) checkInOnTime += 1;
+    if (isLateStatus(resolvedStatus)) checkInLate += 1;
 
     const workingMinutes =
       machineCheckIn && machineCheckOut
@@ -275,28 +269,27 @@ export async function fetchBiometricManageAttendance(
           ? Number(mysqlDay.working_time)
           : computeWorkingMinutes(checkIn, checkOut);
 
-    const periodStats =
-      userId != null ? periodStatsMap.get(userId) || {} : {};
+    const periodStats = periodStatsMap.get(userId) || {};
 
     employeesAttendanceData.push({
-      employee_id: userId ?? 0,
+      employee_id: userId,
       user_id: userId,
-      biometric_employee_code: code,
-      biometric_employee_id: emp.EmployeeId,
-      employee_name:
-        mapping?.user_name || mapping?.employee_name || emp.EmployeeName || code,
-      employee_email: mapping?.user_email || emp.Email || "",
+      emp_code: empCode,
+      biometric_employee_code: empCode,
+      biometric_employee_id: deviceEmp?.EmployeeId ?? null,
+      employee_name: member.employee_name || deviceEmp?.EmployeeName || empCode,
+      employee_email: member.employee_email || deviceEmp?.Email || "",
       org_id: orgId,
       employee_designation:
-        mapping?.role_name || emp.Designation || "employee",
-      employee_profile_img: mapping?.user_image || "",
-      employee_phone: mapping?.user_phone || emp.ContactNo || "",
+        member.employee_designation || deviceEmp?.Designation || "employee",
+      employee_profile_img: member.employee_profile_img || "",
+      employee_phone: member.employee_phone || deviceEmp?.ContactNo || "",
       attendance_check_in_time: checkIn,
       attendance_check_out_time: checkOut,
       employee_working_hours: minutesToHours(workingMinutes),
       employee_attendance_status: resolvedStatus,
       attendance_date: selectedDate,
-      is_active_employee: isActiveEmployee,
+      is_active_employee: true,
       total_attendance_days: Number(periodStats.total_attendance_days || 0),
       total_present_days: Number(periodStats.total_present_days || 0),
       total_absent_days: Number(periodStats.total_absent_days || 0),
