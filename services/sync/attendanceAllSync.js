@@ -10,13 +10,14 @@ import {
 const DEFAULT_ORG_ID = Number(process.env.BIOMETRIC_DEFAULT_ORG_ID || 1);
 
 const ATTENDANCE_RULES = {
-  LATE_AFTER: wallTimeToMinutesSinceMidnight("09:45:00"),
+  LATE_FROM: wallTimeToMinutesSinceMidnight("09:46:00"),
   HALF_DAY_CHECKIN_AFTER: wallTimeToMinutesSinceMidnight("10:30:00"),
   HALF_DAY_CHECKOUT_UNTIL: wallTimeToMinutesSinceMidnight("17:29:00"),
   SHORT_LEAVE_FROM: wallTimeToMinutesSinceMidnight("17:30:00"),
   SHORT_LEAVE_UNTIL: wallTimeToMinutesSinceMidnight("18:15:00"),
   FULL_DAY_CHECKOUT_AFTER: wallTimeToMinutesSinceMidnight("18:20:00"),
   MIN_FULL_DAY_MINUTES: 8 * 60,
+  MIN_ABSENT_MINUTES: 4 * 60,
 };
 
 const STATUS_PRIORITY = {
@@ -46,7 +47,7 @@ function deriveCheckInStatus(checkInMinutes) {
   }
   if (
     Number.isFinite(checkInMinutes) &&
-    checkInMinutes > ATTENDANCE_RULES.LATE_AFTER
+    checkInMinutes >= ATTENDANCE_RULES.LATE_FROM
   ) {
     return "late";
   }
@@ -81,6 +82,14 @@ function deriveFinalAttendanceStatus(checkInMinutes, checkOutMinutes, workingMin
     workingMinutes < ATTENDANCE_RULES.MIN_FULL_DAY_MINUTES
   ) {
     status = pickStrongerStatus(status, "half_day");
+  }
+
+  if (
+    Number.isFinite(workingMinutes) &&
+    workingMinutes > 0 &&
+    workingMinutes < ATTENDANCE_RULES.MIN_ABSENT_MINUTES
+  ) {
+    return "absent";
   }
 
   return status;

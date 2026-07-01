@@ -721,13 +721,16 @@ const DAY_NAMES = [
 ];
 
 const EXPORT_ATTENDANCE_RULES = {
-  late_after: "09:45:00",
+  on_time_until: "09:45:59",
+  late_from: "09:46:00",
   half_day_checkin_after: "10:30:00",
   half_day_checkout_until: "17:29:00",
   short_leave_from: "17:30:00",
   short_leave_until: "18:15:00",
   full_day_checkout_after: "18:20:00",
   min_full_day_hours: 8,
+  min_absent_hours: 4,
+  lates_per_derived_leave: 3,
 };
 
 function addDaysToYmd(ymd, days) {
