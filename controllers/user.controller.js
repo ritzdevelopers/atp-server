@@ -59,7 +59,7 @@ const isValidRole = async (role_id, organization_id) => {
 
 export const user_register_controller = async (req, res) => {
   try {
-    const { name, email, password, phone, user_role_id, organization_id } =
+    const { name, email, password, phone, user_role_id, organization_id, emp_code } =
       req.body;
     if (!name || !email || !password || !phone) {
       return res.status(400).json({ message: "All fields are required" });
@@ -119,6 +119,8 @@ export const user_register_controller = async (req, res) => {
               });
             }
             const orgId = result[0].id;
+            const normalizedEmpCode =
+              String(emp_code ?? "").trim().toUpperCase() || null;
 
             const role_exists = await isValidRole(user_role_id, orgId);
 
@@ -169,10 +171,10 @@ export const user_register_controller = async (req, res) => {
                   }
 
                   // Register User To Organization
-                  const register_user_to_organization_query = `INSERT INTO apt_org_members (user_id, org_id) VALUES (?, ?)`;
+                  const register_user_to_organization_query = `INSERT INTO apt_org_members (user_id, org_id, emp_code) VALUES (?, ?, ?)`;
                   db.query(
                     register_user_to_organization_query,
-                    [user_id, orgId],
+                    [user_id, orgId, normalizedEmpCode],
                     (err, result) => {
                       if (err) {
                         console.error(

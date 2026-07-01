@@ -4,21 +4,33 @@ import { isEmployeeExists } from "../helper/employee_checker.js";
 async function fetchSingleUserAttendanceRows(
   employee_id,
   org_id,
-  { date, month, year },
+  { date, month, year, scope },
 ) {
   const now = new Date();
-  const hasDateFilter =
-    date !== undefined && date !== null && String(date).trim() !== "";
-  const resolvedDate = hasDateFilter ? Number(date) : null;
+  const filterScope = String(scope || "month").trim().toLowerCase();
   const resolvedMonth = Number(month) || now.getMonth() + 1;
   const resolvedYear = Number(year) || now.getFullYear();
 
   const queryValues = [employee_id, org_id];
   let dateFilterSql = "";
-  if (resolvedDate) {
+
+  const useDayFilter =
+    filterScope === "day" &&
+    date !== undefined &&
+    date !== null &&
+    String(date).trim() !== "";
+
+  if (useDayFilter) {
+    const resolvedDate = Number(date);
+    if (!Number.isFinite(resolvedDate) || resolvedDate < 1 || resolvedDate > 31) {
+      const err = new Error("Invalid date");
+      err.statusCode = 400;
+      throw err;
+    }
     dateFilterSql = "AND DAY(user_info.attendance_date) = ?";
     queryValues.push(resolvedDate);
   }
+
   queryValues.push(resolvedMonth, resolvedYear);
 
   const query = `
@@ -477,7 +489,7 @@ export const get_all_users_with_attendance_history = async (req, res) => {
 export const get_single_user_with_attendance_history = async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { org_id, employee_id, date, month, year } = req.query;
+    const { org_id, employee_id, date, month, year, scope } = req.query;
 
     if (!user_id || !org_id || !employee_id) {
       return res.status(400).json({
@@ -510,16 +522,32 @@ export const get_single_user_with_attendance_history = async (req, res) => {
       });
     }
     const now = new Date();
-    const hasDateFilter =
-      date !== undefined && date !== null && String(date).trim() !== "";
-    const resolvedDate = hasDateFilter ? Number(date) : null;
+    const filterScope = String(scope || "month").trim().toLowerCase();
+    if (filterScope !== "month" && filterScope !== "day") {
+      return res.status(400).json({
+        success: false,
+        message: "scope must be month or day",
+      });
+    }
+    const resolvedDate =
+      date !== undefined && date !== null && String(date).trim() !== ""
+        ? Number(date)
+        : null;
     const resolvedMonth = Number(month) || now.getMonth() + 1;
     const resolvedYear = Number(year) || now.getFullYear();
+
+    if (filterScope === "day" && !resolvedDate) {
+      return res.status(400).json({
+        success: false,
+        message: "date is required when scope is day",
+      });
+    }
 
     const result = await fetchSingleUserAttendanceRows(employee_id, org_id, {
       date: resolvedDate,
       month: resolvedMonth,
       year: resolvedYear,
+      scope: filterScope,
     });
 
     return res.status(200).json({
@@ -527,6 +555,12 @@ export const get_single_user_with_attendance_history = async (req, res) => {
       data: result,
     });
   } catch (error) {
+    if (error?.statusCode === 400) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
     console.log("Error in get_single_user_with_attendance_history:", error);
     return res.status(500).json({
       success: false,
@@ -538,7 +572,7 @@ export const get_single_user_with_attendance_history = async (req, res) => {
 export const get_team_member_attendance_history = async (req, res) => {
   try {
     const { user_id } = req.user;
-    const { org_id, employee_id, team_id, date, month, year } = req.query;
+    const { org_id, employee_id, team_id, date, month, year, scope } = req.query;
 
     if (!user_id || !org_id || !employee_id || !team_id) {
       return res.status(400).json({
@@ -574,16 +608,32 @@ export const get_team_member_attendance_history = async (req, res) => {
     }
 
     const now = new Date();
-    const hasDateFilter =
-      date !== undefined && date !== null && String(date).trim() !== "";
-    const resolvedDate = hasDateFilter ? Number(date) : null;
+    const filterScope = String(scope || "month").trim().toLowerCase();
+    if (filterScope !== "month" && filterScope !== "day") {
+      return res.status(400).json({
+        success: false,
+        message: "scope must be month or day",
+      });
+    }
+    const resolvedDate =
+      date !== undefined && date !== null && String(date).trim() !== ""
+        ? Number(date)
+        : null;
     const resolvedMonth = Number(month) || now.getMonth() + 1;
     const resolvedYear = Number(year) || now.getFullYear();
+
+    if (filterScope === "day" && !resolvedDate) {
+      return res.status(400).json({
+        success: false,
+        message: "date is required when scope is day",
+      });
+    }
 
     const result = await fetchSingleUserAttendanceRows(employee_id, org_id, {
       date: resolvedDate,
       month: resolvedMonth,
       year: resolvedYear,
+      scope: filterScope,
     });
 
     return res.status(200).json({
@@ -591,6 +641,12 @@ export const get_team_member_attendance_history = async (req, res) => {
       data: result,
     });
   } catch (error) {
+    if (error?.statusCode === 400) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
     console.log("Error in get_team_member_attendance_history:", error);
     return res.status(500).json({
       success: false,
@@ -665,13 +721,16 @@ const DAY_NAMES = [
 ];
 
 const EXPORT_ATTENDANCE_RULES = {
-  late_after: "09:45:00",
+  on_time_until: "09:45:59",
+  late_from: "09:46:00",
   half_day_checkin_after: "10:30:00",
   half_day_checkout_until: "17:29:00",
   short_leave_from: "17:30:00",
   short_leave_until: "18:15:00",
   full_day_checkout_after: "18:20:00",
   min_full_day_hours: 8,
+  min_absent_hours: 4,
+  lates_per_derived_leave: 3,
 };
 
 function addDaysToYmd(ymd, days) {
