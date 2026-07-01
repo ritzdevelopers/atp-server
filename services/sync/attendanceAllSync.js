@@ -261,8 +261,56 @@ export async function updateAttendanceFromPunches(
 
     if (attendance_logs.length === 1) {
       if (existingRows.length > 0) {
+        const existing = existingRows[0];
+        const existingCheckIn = existing.check_in;
+        const existingCheckOut = existing.check_out || null;
+
+        if (existingCheckIn === check_in) {
+          if (ownsConnection) await connection.commit();
+          return { skipped: true, reason: "unchanged", attendance_date };
+        }
+
+        const resolvedCheckOutMinutes = existingCheckOut
+          ? wallTimeToMinutesSinceMidnight(
+              existingCheckOut.includes(" ")
+                ? existingCheckOut.split(" ")[1]
+                : existingCheckOut,
+            )
+          : NaN;
+        const resolvedWorkingMinutes =
+          existingCheckOut &&
+          Number.isFinite(checkInMinutes) &&
+          Number.isFinite(resolvedCheckOutMinutes)
+            ? Math.max(0, Math.round(resolvedCheckOutMinutes - checkInMinutes))
+            : null;
+        const resolvedStatus = deriveFinalAttendanceStatus(
+          checkInMinutes,
+          resolvedCheckOutMinutes,
+          resolvedWorkingMinutes,
+        );
+
+        await connection.query(
+          `UPDATE attendance
+           SET
+             check_in = ?,
+             attendance_status = ?,
+             working_time = ?,
+             working_hours = ?
+           WHERE id = ?`,
+          [
+            check_in,
+            resolvedStatus,
+            resolvedWorkingMinutes,
+            resolvedWorkingMinutes != null
+              ? (resolvedWorkingMinutes / 60).toFixed(2)
+              : 0,
+            existing.id,
+          ],
+        );
+
+        await insertAttendanceLog(connection, user_id, org_id, "check_in", check_in);
         if (ownsConnection) await connection.commit();
-        return { skipped: true, reason: "already_exists", attendance_date };
+        return { synced: true, action: "update_check_in", attendance_date };
       }
 
       await connection.query(
@@ -313,9 +361,12 @@ export async function updateAttendanceFromPunches(
     }
 
     const existing = existingRows[0];
-    const existingCheckOut = existing.check_out;
+    const existingCheckIn = existing.check_in;
+    const existingCheckOut = existing.check_out || null;
+    const checkInUnchanged = existingCheckIn === check_in;
+    const checkOutUnchanged = existingCheckOut === check_out;
 
-    if (existingCheckOut && existingCheckOut === check_out) {
+    if (checkInUnchanged && checkOutUnchanged) {
       if (ownsConnection) await connection.commit();
       return { skipped: true, reason: "unchanged", attendance_date };
     }
@@ -323,12 +374,14 @@ export async function updateAttendanceFromPunches(
     await connection.query(
       `UPDATE attendance
        SET
+         check_in = ?,
          check_out = ?,
          attendance_status = ?,
          working_time = ?,
          working_hours = ?
        WHERE id = ?`,
       [
+        check_in,
         check_out,
         attendance_status,
         workingMinutes,
@@ -337,20 +390,31 @@ export async function updateAttendanceFromPunches(
       ],
     );
 
-    if (existingCheckOut) {
-      await insertAttendanceLog(
-        connection,
-        user_id,
-        org_id,
-        "manual_update",
-        check_out,
-      );
-    } else {
-      await insertAttendanceLog(connection, user_id, org_id, "check_out", check_out);
+    if (!checkInUnchanged) {
+      await insertAttendanceLog(connection, user_id, org_id, "check_in", check_in);
+    }
+
+    if (!checkOutUnchanged) {
+      if (existingCheckOut) {
+        await insertAttendanceLog(
+          connection,
+          user_id,
+          org_id,
+          "manual_update",
+          check_out,
+        );
+      } else {
+        await insertAttendanceLog(connection, user_id, org_id, "check_out", check_out);
+      }
     }
 
     if (ownsConnection) await connection.commit();
-    return { synced: true, action: "update_check_out", attendance_date };
+
+    let action = "update_attendance";
+    if (checkInUnchanged) action = "update_check_out";
+    else if (checkOutUnchanged) action = "update_check_in";
+
+    return { synced: true, action, attendance_date };
   } catch (error) {
     if (ownsConnection) await connection.rollback();
     throw error;
