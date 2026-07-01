@@ -679,6 +679,25 @@ function lastDayOfMonth(year, month) {
   return new Date(year, month, 0).getDate();
 }
 
+function isFutureCalendarMonth(year, month, now = new Date()) {
+  const currentYear = now.getFullYear();
+  const currentMonth = now.getMonth() + 1;
+  const resolvedYear = Number(year);
+  const resolvedMonth = Number(month);
+  if (
+    !Number.isFinite(resolvedYear) ||
+    !Number.isFinite(resolvedMonth) ||
+    resolvedMonth < 1 ||
+    resolvedMonth > 12
+  ) {
+    return false;
+  }
+  return (
+    resolvedYear > currentYear ||
+    (resolvedYear === currentYear && resolvedMonth > currentMonth)
+  );
+}
+
 function resolveExportDateRange({ mode, month, year, joiningDate }) {
   const now = new Date();
   const today = formatLocalDateYmd(now);
@@ -1050,6 +1069,13 @@ export const export_single_user_attendance_history = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "mode must be full or monthly",
+      });
+    }
+
+    if (exportMode === "monthly" && isFutureCalendarMonth(year, month)) {
+      return res.status(400).json({
+        success: false,
+        message: "Cannot export attendance for a future month.",
       });
     }
 
