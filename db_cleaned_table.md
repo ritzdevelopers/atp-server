@@ -1013,3 +1013,65 @@ CREATE TABLE leave_reviewer(
     foreign key (approval_role_id) references apt_roles(id)
     
 );
+
+
+
+
+CREATE TABLE regularization(
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    request_type ENUM('check_in','check_out','both') NOT NULL,
+
+    check_in_time TIME NULL,
+    check_out_time TIME NULL,
+
+    action_date DATE NOT NULL,
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    reporting_manager INT NOT NULL,
+
+    reason TEXT NOT NULL,
+
+    reg_status ENUM('pending','approved','rejected') DEFAULT 'pending',
+
+    review_comment TEXT NULL,
+
+    approved_by INT NULL,
+    approved_at DATETIME NULL,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES apt_users(id),
+    FOREIGN KEY (org_id) REFERENCES apt_organizations(id),
+    FOREIGN KEY (reporting_manager) REFERENCES apt_users(id),
+    FOREIGN KEY (approved_by) REFERENCES apt_users(id)
+);
+
+CREATE TABLE regularization_balance(
+    id INT PRIMARY KEY AUTO_INCREMENT,
+
+    user_id INT NOT NULL,
+    org_id INT NOT NULL,
+
+    balance INT NOT NULL DEFAULT 0,
+    used INT NOT NULL DEFAULT 0,
+
+    assigned_by INT NOT NULL,
+
+    valid_from DATE,
+    valid_to DATE,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (user_id) REFERENCES apt_users(id),
+    FOREIGN KEY (org_id) REFERENCES apt_organizations(id),
+    FOREIGN KEY (assigned_by) REFERENCES apt_users(id),
+
+    UNIQUE KEY uk_user_org (user_id, org_id)
+);

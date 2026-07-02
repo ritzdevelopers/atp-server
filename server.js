@@ -42,7 +42,7 @@ import "./helper/auto_leave_assign.js";
 import { syncAgent } from "./jobs/sync.agent.js";
 import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 import employeeLeaveManagementRoutes from "./routes/employee.leave.management.routes.js";
-
+import regularizationRoutes from "./routes/regularization/regularization.routes.js";
 dotenv.config();
 
 const app = express();
@@ -164,7 +164,8 @@ app.use("/api/map-users", mapUsersRoutes);
 
 app.use("/api/sync-esl", syncEslRoutes);
 
-
+// Regularization Routes
+app.use("/api/regularization", regularizationRoutes);
 
 socket_server.listen(3000, async () => {
   try {
