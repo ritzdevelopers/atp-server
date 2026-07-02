@@ -41,6 +41,7 @@ import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
 import { syncAgent } from "./jobs/sync.agent.js";
 import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
+import employeeLeaveManagementRoutes from "./routes/employee.leave.management.routes.js";
 
 dotenv.config();
 
@@ -135,7 +136,7 @@ app.use("/api/tasks-management", tasksRoutes);
 
 // Leave Management Routes
 app.use("/api/leave-management", leaveManagementRoutes);
-
+app.use("/api/employee-leave-management", employeeLeaveManagementRoutes);
 // Employee salary
 app.use("/api/employee-salary", employeeSalaryRoutes);
 
@@ -162,6 +163,8 @@ app.use("/api/biometric-sync-agent", biometricSyncAgentRoutes);
 app.use("/api/map-users", mapUsersRoutes);
 
 app.use("/api/sync-esl", syncEslRoutes);
+
+
 
 socket_server.listen(3000, async () => {
   try {

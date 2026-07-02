@@ -972,3 +972,44 @@ CREATE TABLE leave_scheduler (
 );
 
 ALTER TABLE leave_scheduler REMOVE  mark_done;
+
+
+
+CREATE TABLE employee_leave (
+	id int primary key auto_increment,
+    user_id int not null,
+    org_id int not null,
+    team_id int,
+    leave_type_id int not null,
+    leave_duration enum('short_leave', 'half_day', 'full_day'),
+    start_date date,
+    end_date date,
+    leave_days DECIMAL(3,1),
+    session_info enum('session_1', 'session_2'),
+    timing time,
+    reason TEXT,
+    leave_status enum('pending', 'approved', 'rejected') default 'pending',
+    created_at timestamp default current_timestamp,
+    updated_at timestamp default current_timestamp on update current_timestamp,
+    
+    foreign key (user_id) references apt_users(id),
+    foreign key (org_id) references apt_organizations(id),
+    foreign key (team_id) references org_teams(id),
+    foreign key (leave_type_id) references leave_types(id)  
+);
+
+CREATE TABLE leave_reviewer(
+	id int primary key auto_increment,
+    reviewer_id int not null,
+    leave_query_id int not null,
+    query_status enum('pending', 'approved', 'rejected') default 'pending',
+    approval_role enum('reporting_manager', 'hr', 'admin'),
+    approval_role_id int not null,
+    review_comment TEXT,
+    created_at timestamp default current_timestamp,
+    updated_at timestamp default current_timestamp on update current_timestamp,
+    foreign key (reviewer_id) references apt_users(id),
+    foreign key (leave_query_id) references employee_leave(id),
+    foreign key (approval_role_id) references apt_roles(id)
+    
+);

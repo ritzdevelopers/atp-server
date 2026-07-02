@@ -2,7 +2,10 @@ import db, { pool } from "../db/connect.js";
 import calculateLeaveBalanceCount from "../helper/calculate_leave_balance_count.js";
 import { isEmployeeExists } from "../helper/employee_checker.js";
 import activity_tracker from "../helper/activity_tracking.js";
-import check_team_lead from "../helper/check_team_lead.js";
+import {
+  canModerateOrgWideAsHr,
+  canModerateTeamScopedRequest,
+} from "../helper/can_moderate_team_request.js";
 
 export const getAllLeavesController = async (req, res) => {
   try {
@@ -528,27 +531,14 @@ export const updateAttendanceQueryStatusController = async (req, res) => {
       await connection.rollback();
       return res.status(400).json({ message: "User not found" });
     }
-    // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
-    if (!team_id || team_id === null) {
-      if (
-        !(await user_role_checker(connection, action_user_id, org_id, "hr"))
-      ) {
-        await connection.rollback();
-        return res
-          .status(400)
-          .json({ message: "You are not authorized to process this query" });
-      }
-    }
-    // Check If The User Is The Team Lead ::
-    if (
-      !(await check_team_lead(
-        connection,
-        employee_id,
-        action_user_id,
-        org_id,
-        team_id,
-      ))
-    ) {
+    // Reporting manager (team admin) or HR only.
+    const canProcess = team_id
+      ? await canModerateTeamScopedRequest(connection, action_user_id, org_id, {
+          employee_id,
+          team_id,
+        })
+      : await canModerateOrgWideAsHr(connection, action_user_id, org_id);
+    if (!canProcess) {
       await connection.rollback();
       return res
         .status(400)
@@ -632,26 +622,11 @@ export const updateLeaveQueryStatusController = async (req, res) => {
 
     const { query_id, query_status: updated_status, team_id } = req.body;
 
-    // If team_id provided then only team lead and hr can process the query otherwise only hr can process ::
-    if (!team_id || team_id === null) {
-      if (
-        !(await user_role_checker(connection, action_user_id, org_id, "hr"))
-      ) {
-        await connection.rollback();
-        return res
-          .status(400)
-          .json({ message: "You are not authorized to process this query" });
-      }
-    }
-
     if (!ATTENDANCE_QUERY_STATUS_ADMIN.includes(updated_status)) {
       console.log("Invalid status", updated_status);
       await connection.rollback();
       return res.status(400).json({ message: "Invalid status" });
     }
-
-    const year = new Date().getFullYear();
-    const month = new Date().getMonth() + 1;
 
     const [leave_query_info] = await connection.query(
       `
@@ -681,21 +656,24 @@ export const updateLeaveQueryStatusController = async (req, res) => {
         .status(400)
         .json({ message: "Query has already been processed" });
     }
-    // Check If The User Is The Team Lead ::
-    if (
-      !(await check_team_lead(
-        connection,
-        employee_id,
-        action_user_id,
-        org_id,
-        team_id,
-      ))
-    ) {
+
+    // Reporting manager (team admin) or HR only.
+    const canProcess = team_id
+      ? await canModerateTeamScopedRequest(connection, action_user_id, org_id, {
+          employee_id,
+          team_id,
+        })
+      : await canModerateOrgWideAsHr(connection, action_user_id, org_id);
+    if (!canProcess) {
       await connection.rollback();
       return res
         .status(400)
         .json({ message: "You are not authorized to process this query" });
     }
+
+    const year = new Date().getFullYear();
+    const month = new Date().getMonth() + 1;
+
     if (updated_status === "rejected") {
       // Update Leave Query Status ::
       const [update_leave_query_status] = await connection.query(
