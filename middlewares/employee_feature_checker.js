@@ -79,6 +79,13 @@ const employee_feature_checker = (
         return next();
       }
 
+      const userRole = String(req.user?.user_role_name || "")
+        .trim()
+        .toLowerCase();
+      if (userRole === "admin") {
+        return next();
+      }
+
       // Employee Feature + Sub Feature Permission Check
       const [permission_result] = await connection.query(
         `

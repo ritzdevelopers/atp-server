@@ -638,10 +638,14 @@ export const get_organization_features_features_info_controller = async (req, re
       [org_id, user_id],
     );
 
+    const userRole = String(req.user?.user_role_name || "")
+      .trim()
+      .toLowerCase();
     const isOrgOwner = owner_result.length > 0;
+    const useFullOrgFeatures = isOrgOwner || userRole === "admin";
 
     const [rows] = await connection.query(
-      isOrgOwner
+      useFullOrgFeatures
         ? `
       SELECT
         f.id AS parent_feature_id,
@@ -692,7 +696,7 @@ export const get_organization_features_features_info_controller = async (req, re
         AND (sf.id IS NULL OR osfa.sub_feature_id IS NOT NULL)
       ORDER BY f.id ASC, sf.id ASC
       `,
-      isOrgOwner ? [org_id] : [user_id, org_id],
+      useFullOrgFeatures ? [org_id] : [user_id, org_id],
     );
 
     const groupedFeatures = Object.values(

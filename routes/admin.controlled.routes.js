@@ -166,11 +166,11 @@ router.get(
   user_validation_middleware,
   req_sender_auth,
   user_membership_checker,
-  employee_feature_checker(
-    "company-holiday-management",
-    "manage-attendances",
-    "read",
-  ),
+  // employee_feature_checker(
+  //   "company-holiday-management",
+  //   "manage-attendances",
+  //   "read",
+  // ),
   getAllAttendanceQueriesController,
 );
 

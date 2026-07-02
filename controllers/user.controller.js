@@ -561,6 +561,7 @@ ON emp_team.user_id = apt_users.id
 AND emp_team.org_id = apt_org_members.org_id
 
 WHERE apt_org_members.org_id = ?
+AND apt_org_members.is_active = 1
 AND apt_users.id <> ?
 AND apt_users.id <> ?
 `;
