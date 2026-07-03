@@ -20,11 +20,17 @@ Attendance Report Export Logic For Calculation Of Employee Work Status
 
    Late Rules:
 
-   - Check-In after 9:45 AM                  → Late Mark
+   - Check-In on or after 9:45 AM            → Late Mark
    - Check-In after 10:30 AM                 → Half Day
    - Check-Out before 5:30 PM                → Half Day
    - Check-Out between 5:40 PM and 6:20 PM   → Short Leave
    - Check-Out after 6:20 PM                 → Full Day
+
+   Day credits:
+
+   - Full Day = 1
+   - Half Day = 0.5
+   - Short Leave = 0.75
 
 7. Create report columns:
 
@@ -46,12 +52,13 @@ Attendance Report Export Logic For Calculation Of Employee Work Status
 
    - Full Day = 1
    - Half Day = 0.5
-   - Short Leave = Present
+   - Short Leave = 0.75
 
    Working Days may be decimal values like:
    - 20
    - 22.5
    - 28.5
+   - 25.75
 
 9. Calculate Late Leave deduction:
 
