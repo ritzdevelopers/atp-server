@@ -190,7 +190,7 @@ export const getAttendanceHistoryOfEmployeeController = async (req, res) => {
         DATE_FORMAT(check_in, '%Y-%m-%d %H:%i:%s') AS check_in,
         DATE_FORMAT(check_out, '%Y-%m-%d %H:%i:%s') AS check_out,
         attendance_status AS status,
-        COALESCE(working_time, working_hours, 0) AS working_time
+        COALESCE(working_time, ROUND(working_hours * 60), 0) AS working_time
       FROM attendance
       WHERE user_id = ?
     `;
