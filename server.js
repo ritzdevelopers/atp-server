@@ -43,6 +43,7 @@ import { syncAgent } from "./jobs/sync.agent.js";
 import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 import employeeLeaveManagementRoutes from "./routes/employee.leave.management.routes.js";
 import regularizationRoutes from "./routes/regularization/regularization.routes.js";
+import compOffManagementRoutes from "./routes/comp-off-management/comp-off-management.routes.js";
 dotenv.config();
 
 const app = express();
@@ -137,6 +138,7 @@ app.use("/api/tasks-management", tasksRoutes);
 // Leave Management Routes
 app.use("/api/leave-management", leaveManagementRoutes);
 app.use("/api/employee-leave-management", employeeLeaveManagementRoutes);
+
 // Employee salary
 app.use("/api/employee-salary", employeeSalaryRoutes);
 
@@ -166,6 +168,9 @@ app.use("/api/sync-esl", syncEslRoutes);
 
 // Regularization Routes
 app.use("/api/regularization", regularizationRoutes);
+
+// Comp Off Management Routes ::
+app.use("/api/comp-off-management", compOffManagementRoutes);
 
 socket_server.listen(3000, async () => {
   try {

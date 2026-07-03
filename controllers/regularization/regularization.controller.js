@@ -9,21 +9,28 @@ function toDbNullable(value) {
   return value;
 }
 
+function dateToLocalYmd(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
 function normalizeDateYmd(value) {
   if (value == null || value === "") return null;
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime())) return null;
-    return value.toISOString().slice(0, 10);
+    return dateToLocalYmd(value);
   }
   const str = String(value).trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(str)) return null;
-  const parsed = new Date(`${str}T00:00:00`);
+  const parsed = new Date(`${str}T12:00:00`);
   if (Number.isNaN(parsed.getTime())) return null;
   return str;
 }
 
 function todayYmd() {
-  return new Date().toISOString().slice(0, 10);
+  return dateToLocalYmd(new Date());
 }
 
 function normalizeTime(value) {
@@ -249,6 +256,279 @@ function validateRegularizationReview(body) {
   };
 }
 
+function pushUniqueReportingManager(managers, seen, manager) {
+  const key = String(manager.user_id);
+  if (seen.has(key)) return;
+  seen.add(key);
+  managers.push(manager);
+}
+
+async function fetchTeamLeaderReportingManagers(connection, user_id, org_id) {
+  const [rows] = await connection.query(
+    `SELECT DISTINCT
+      team_leader.id AS user_id,
+      team_leader.user_name AS user_name,
+      team_leader.user_email AS user_email,
+      rom.emp_code AS emp_code,
+      ot.id AS team_id,
+      ot.team_name AS team_name
+    FROM team_members tm
+    INNER JOIN org_teams ot
+      ON ot.id = tm.team_id AND ot.org_id = tm.org_id
+    INNER JOIN apt_users team_leader
+      ON team_leader.id = ot.admin_id
+    INNER JOIN apt_org_members rom
+      ON rom.user_id = team_leader.id
+      AND rom.org_id = tm.org_id
+      AND rom.is_active = 1
+    WHERE tm.user_id = ?
+      AND tm.org_id = ?
+      AND tm.leave_date IS NULL
+      AND team_leader.id <> ?
+    ORDER BY team_leader.user_name ASC, ot.team_name ASC`,
+    [user_id, org_id, user_id],
+  );
+
+  const managers = [];
+  const seen = new Set();
+  const teamNamesByUser = new Map();
+
+  for (const row of rows) {
+    const uid = Number(row.user_id);
+    if (!Number.isInteger(uid) || uid <= 0) continue;
+
+    if (row.team_name) {
+      const names = teamNamesByUser.get(uid) ?? [];
+      if (!names.includes(row.team_name)) {
+        names.push(row.team_name);
+        teamNamesByUser.set(uid, names);
+      }
+    }
+
+    if (seen.has(String(uid))) continue;
+
+    pushUniqueReportingManager(managers, seen, {
+      user_id: uid,
+      user_name: row.user_name,
+      user_email: row.user_email ?? null,
+      emp_code: row.emp_code ?? null,
+      role: "reporting_manager",
+      team_id: row.team_id ?? null,
+      team_name: row.team_name ?? null,
+      team_names: teamNamesByUser.get(uid) ?? [],
+    });
+  }
+
+  for (const manager of managers) {
+    const names = teamNamesByUser.get(manager.user_id) ?? [];
+    manager.team_names = names;
+    if (names.length > 0) {
+      manager.team_name = names.join(", ");
+    }
+  }
+
+  return managers;
+}
+
+async function fetchHrAdminReportingManagers(connection, org_id, user_id) {
+  const managers = [];
+  const seen = new Set();
+
+  const [adminRows] = await connection.query(
+    `SELECT
+      admin_user.id AS user_id,
+      admin_user.user_name AS user_name,
+      admin_user.user_email AS user_email,
+      om.emp_code AS emp_code
+    FROM apt_organizations org
+    INNER JOIN apt_users admin_user ON admin_user.id = org.owner_id
+    INNER JOIN apt_org_members om
+      ON om.user_id = admin_user.id AND om.org_id = org.id AND om.is_active = 1
+    INNER JOIN apt_user_roles aur
+      ON aur.user_id = admin_user.id AND aur.org_id = org.id
+    INNER JOIN apt_roles ar
+      ON ar.id = aur.role_id AND ar.org_id = org.id AND ar.role_name = 'admin'
+    WHERE org.id = ?
+      AND admin_user.id <> ?`,
+    [org_id, user_id],
+  );
+
+  for (const row of adminRows) {
+    pushUniqueReportingManager(managers, seen, {
+      user_id: row.user_id,
+      user_name: row.user_name,
+      user_email: row.user_email ?? null,
+      emp_code: row.emp_code ?? null,
+      role: "admin",
+      team_id: null,
+      team_name: null,
+      team_names: [],
+    });
+  }
+
+  const [hrRows] = await connection.query(
+    `SELECT
+      hr_user.id AS user_id,
+      hr_user.user_name AS user_name,
+      hr_user.user_email AS user_email,
+      om.emp_code AS emp_code
+    FROM apt_user_roles aur
+    INNER JOIN apt_roles ar
+      ON ar.id = aur.role_id AND ar.org_id = aur.org_id AND ar.role_name = 'hr'
+    INNER JOIN apt_users hr_user ON hr_user.id = aur.user_id
+    INNER JOIN apt_org_members om
+      ON om.user_id = hr_user.id AND om.org_id = aur.org_id AND om.is_active = 1
+    WHERE aur.org_id = ?
+      AND hr_user.id <> ?`,
+    [org_id, user_id],
+  );
+
+  for (const row of hrRows) {
+    pushUniqueReportingManager(managers, seen, {
+      user_id: row.user_id,
+      user_name: row.user_name,
+      user_email: row.user_email ?? null,
+      emp_code: row.emp_code ?? null,
+      role: "hr",
+      team_id: null,
+      team_name: null,
+      team_names: [],
+    });
+  }
+
+  return managers.sort((a, b) =>
+    String(a.user_name ?? "").localeCompare(String(b.user_name ?? "")),
+  );
+}
+
+export async function fetchReportingManager(req, res) {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+
+    const { user_id } = req.user;
+    const org_id = req.org_id;
+
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    const [teamRows] = await connection.query(
+      `SELECT id
+       FROM team_members
+       WHERE user_id = ? AND org_id = ? AND leave_date IS NULL
+       LIMIT 1`,
+      [user_id, org_id],
+    );
+
+    let data;
+    let source;
+
+    if (teamRows.length > 0) {
+      data = await fetchTeamLeaderReportingManagers(connection, user_id, org_id);
+      source = "team_leaders";
+    } else {
+      data = await fetchHrAdminReportingManagers(connection, org_id, user_id);
+      source = "hr_admin";
+    }
+
+    return res.status(200).json({
+      message:
+        data.length > 0
+          ? "Reporting managers fetched"
+          : "No reporting managers available",
+      source,
+      data,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+async function fetchActiveRegularizationBalance(connection, user_id, org_id) { 
+  
+  const [rows] = await connection.query(
+    `SELECT id, balance, used,
+      DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
+      DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_to,
+      assigned_by, created_at, updated_at
+     FROM regularization_balance
+     WHERE user_id = ? AND org_id = ?
+     LIMIT 1`,
+    [user_id, org_id],
+  );
+
+  if (rows.length === 0) {
+    return {
+      is_available: false,
+      balance: 0,
+      used: 0,
+      remaining: 0,
+      valid_from: null,
+      valid_to: null,
+    };
+  }
+
+  const row = rows[0];
+  const today = todayYmd();
+  const valid_from = normalizeDateYmd(row.valid_from);
+  const valid_to = normalizeDateYmd(row.valid_to);
+  const balance = Number(row.balance);
+  const used = Number(row.used);
+  const remaining = Math.max(0, balance - used);
+
+  const periodActive =
+    valid_from &&
+    valid_to &&
+    valid_from <= today &&
+    valid_to >= today;
+  const hasQuota = balance > 0 && used < balance;
+  const is_available = Boolean(periodActive && hasQuota);
+
+  return {
+    is_available,
+    balance,
+    used,
+    remaining: is_available ? remaining : 0,
+    valid_from,
+    valid_to,
+    assigned_by: row.assigned_by ?? null,
+  };
+}
+
+export async function getRegularizationBalance(req, res) {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+
+    const { user_id } = req.user;
+    const org_id = req.org_id;
+
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    const balanceInfo = await fetchActiveRegularizationBalance(
+      connection,
+      user_id,
+      org_id,
+    );
+
+    return res.status(200).json({
+      message: balanceInfo.is_available
+        ? "Regularization balance fetched"
+        : "No regularization balance available for this month",
+      data: balanceInfo,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
 export async function applyForRegularization(req, res) {
   let connection;
   try {
@@ -324,63 +604,29 @@ export async function applyForRegularization(req, res) {
       );
     }
 
+    const balanceInfo = await fetchActiveRegularizationBalance(
+      connection,
+      user_id,
+      org_id,
+    );
+
+    if (!balanceInfo.is_available) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "No regularization balance available for this month",
+      );
+    }
+
     const [reg_balance_rows] = await connection.query(
-      `SELECT id, balance, used, valid_from, valid_to
+      `SELECT id, balance, used
        FROM regularization_balance
        WHERE user_id = ? AND org_id = ?
        LIMIT 1`,
       [user_id, org_id],
     );
-
-    if (reg_balance_rows.length === 0) {
-      return await rollbackAndRespond(
-        connection,
-        res,
-        400,
-        "No regularization balance available for this month",
-      );
-    }
-
     const reg_balance = reg_balance_rows[0];
-    const today = todayYmd();
-    const valid_from = normalizeDateYmd(reg_balance.valid_from);
-    const valid_to = normalizeDateYmd(reg_balance.valid_to);
-
-    if (!valid_from || !valid_to) {
-      return await rollbackAndRespond(
-        connection,
-        res,
-        400,
-        "No regularization balance available for this month",
-      );
-    }
-
-    if (valid_from > today || valid_to < today) {
-      return await rollbackAndRespond(
-        connection,
-        res,
-        400,
-        "No regularization balance available for this month",
-      );
-    }
-
-    if (Number(reg_balance.balance) <= 0) {
-      return await rollbackAndRespond(
-        connection,
-        res,
-        400,
-        "No regularization balance available for this month",
-      );
-    }
-
-    if (Number(reg_balance.used) >= Number(reg_balance.balance)) {
-      return await rollbackAndRespond(
-        connection,
-        res,
-        400,
-        "No regularization balance available for this month",
-      );
-    }
 
     const [insertResult] = await connection.query(
       `INSERT INTO regularization
@@ -441,9 +687,12 @@ function formatTimeValue(value) {
 function formatDateValue(value) {
   if (!value) return null;
   if (value instanceof Date) {
-    return value.toISOString().slice(0, 10);
+    if (Number.isNaN(value.getTime())) return null;
+    return dateToLocalYmd(value);
   }
-  return String(value).slice(0, 10);
+  const str = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(str)) return str.slice(0, 10);
+  return str.slice(0, 10);
 }
 
 function parseRegularizationId(id) {
@@ -458,7 +707,7 @@ const REGULARIZATION_SELECT_SQL = `
     r.request_type,
     r.check_in_time,
     r.check_out_time,
-    r.action_date,
+    DATE_FORMAT(r.action_date, '%Y-%m-%d') AS action_date,
     r.user_id,
     r.org_id,
     r.reporting_manager,
@@ -512,7 +761,7 @@ const REGULARIZATION_MANAGER_SELECT_SQL = `
     r.request_type,
     r.check_in_time,
     r.check_out_time,
-    r.action_date,
+    DATE_FORMAT(r.action_date, '%Y-%m-%d') AS action_date,
     r.user_id,
     r.org_id,
     r.reporting_manager,
@@ -598,6 +847,7 @@ async function restoreRegularizationBalance(connection, user_id, org_id) {
   );
   return balanceUpdate.affectedRows > 0;
 }
+
 
 export async function updateRegularization(req, res) {
   let connection;

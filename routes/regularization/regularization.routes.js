@@ -4,6 +4,8 @@ import req_sender_auth from "../../middlewares/req_sender_auth.js";
 import user_membership_checker from "../../middlewares/user_membership_checker.js";
 import {
   applyForRegularization,
+  fetchReportingManager,
+  getRegularizationBalance,
   updateRegularization,
   deleteRegularization,
   getRegularization,
@@ -22,6 +24,8 @@ const auth = [
 ];
 
 // ---------------- Used By Employee ---------------- //
+router.get("/get-my-regularization-balance", ...auth, getRegularizationBalance);
+router.get("/get-reporting-managers", ...auth, fetchReportingManager);
 router.post("/apply-for-regularization", ...auth, applyForRegularization);
 router.patch("/update-regularization/:id", ...auth, updateRegularization);
 router.delete("/delete-regularization/:id", ...auth, deleteRegularization);
