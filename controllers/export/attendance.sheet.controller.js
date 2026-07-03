@@ -152,12 +152,14 @@ export async function calculateAttendanceSheetExportController(req, res) {
     const { user_id } = req.user;
     const { org_id, employee_id, mode, month, year } = req.query;
 
-    if (!user_id || !org_id || !employee_id) {
+    if (!user_id || !org_id) {
       return res.status(400).json({
         success: false,
-        message: "org_id and employee_id are required",
+        message: "org_id is required",
       });
     }
+
+    const resolvedEmployeeId = employee_id || user_id;
 
     const exportMode = String(mode || "monthly").trim().toLowerCase();
     if (exportMode !== "full" && exportMode !== "monthly") {
@@ -187,7 +189,7 @@ export async function calculateAttendanceSheetExportController(req, res) {
       });
     }
 
-    const profile = await fetchEmployeeExportProfile(employee_id, org_id);
+    const profile = await fetchEmployeeExportProfile(resolvedEmployeeId, org_id);
     if (!profile) {
       return res.status(404).json({
         success: false,
@@ -206,26 +208,26 @@ export async function calculateAttendanceSheetExportController(req, res) {
     const [attendanceRows, leaves, regularizations, compOffBalance] =
       await Promise.all([
         fetchAttendanceRowsInRange(
-          employee_id,
+          resolvedEmployeeId,
           org_id,
           period.fromDate,
           period.toDate,
         ),
         fetchApprovedLeaves(
           db,
-          employee_id,
+          resolvedEmployeeId,
           org_id,
           period.fromDate,
           period.toDate,
         ),
         fetchApprovedRegularizations(
           db,
-          employee_id,
+          resolvedEmployeeId,
           org_id,
           period.fromDate,
           period.toDate,
         ),
-        fetchCompOffBalance(db, employee_id, org_id),
+        fetchCompOffBalance(db, resolvedEmployeeId, org_id),
       ]);
 
     const calculated = calculateAttendanceSheetExport({

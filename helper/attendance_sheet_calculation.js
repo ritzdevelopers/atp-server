@@ -75,9 +75,24 @@ export function deriveFinalAttendanceStatus(
   checkOutMinutes,
   workingMinutes,
 ) {
+  const hasFullDayHours =
+    Number.isFinite(workingMinutes) &&
+    workingMinutes >= ATTENDANCE_RULES.MIN_FULL_DAY_MINUTES;
+
   let status = deriveStatusFromWorkingHours(workingMinutes);
   if (status === "absent") {
     return status;
+  }
+
+  // 8+ hours worked always counts as a full day (present or late mark only).
+  if (hasFullDayHours) {
+    if (
+      Number.isFinite(checkInMinutes) &&
+      checkInMinutes > ATTENDANCE_RULES.ON_TIME_UNTIL
+    ) {
+      return "late";
+    }
+    return "present";
   }
 
   if (Number.isFinite(checkInMinutes)) {
@@ -99,10 +114,6 @@ export function deriveFinalAttendanceStatus(
       checkOutMinutes <= ATTENDANCE_RULES.SHORT_LEAVE_UNTIL
     ) {
       status = pickStrongerStatus(status, "short_leave");
-    } else if (checkOutMinutes > ATTENDANCE_RULES.FULL_DAY_CHECKOUT_AFTER) {
-      if (workingMinutes >= ATTENDANCE_RULES.MIN_FULL_DAY_MINUTES) {
-        status = status === "late" ? "late" : "present";
-      }
     }
   }
 
@@ -260,7 +271,15 @@ function workingMinutesFromPunches(checkIn, checkOut) {
   return Math.max(0, Math.round(checkOutMinutes - checkInMinutes));
 }
 
-function deriveStatusFromPunches(checkIn, checkOut) {
+function resolveWorkingMinutes(record, checkIn, checkOut) {
+  const stored = Number(record?.working_time ?? 0);
+  if (Number.isFinite(stored) && stored > 0) {
+    return stored;
+  }
+  return workingMinutesFromPunches(checkIn, checkOut);
+}
+
+function deriveStatusFromPunches(checkIn, checkOut, workingMinutesOverride = null) {
   if (!checkIn) return "absent";
 
   const checkInMinutes = wallTimeToMinutesSinceMidnight(
@@ -269,7 +288,8 @@ function deriveStatusFromPunches(checkIn, checkOut) {
   const checkOutMinutes = checkOut
     ? wallTimeToMinutesSinceMidnight(timePartFromDateTime(checkOut))
     : NaN;
-  const workingMinutes = workingMinutesFromPunches(checkIn, checkOut);
+  const workingMinutes =
+    workingMinutesOverride ?? workingMinutesFromPunches(checkIn, checkOut);
 
   return deriveFinalAttendanceStatus(
     checkInMinutes,
@@ -496,7 +516,7 @@ export function buildCalculatedCalendarDays({
 
     const checkIn = record?.check_in ?? null;
     const checkOut = record?.check_out ?? null;
-    const workingMinutes = workingMinutesFromPunches(checkIn, checkOut);
+    const workingMinutes = resolveWorkingMinutes(record, checkIn, checkOut);
 
     if (isWeekend && !checkIn) {
       return {
@@ -562,7 +582,11 @@ export function buildCalculatedCalendarDays({
       };
     }
 
-    const attendanceStatus = deriveStatusFromPunches(checkIn, checkOut);
+    const attendanceStatus = deriveStatusFromPunches(
+      checkIn,
+      checkOut,
+      workingMinutes,
+    );
 
     return {
       date,
@@ -614,24 +638,32 @@ export function summarizeAttendanceSheet(calendarDays, leaveTotals, compOffBalan
       continue;
     }
 
-    const credit = workingDayCredit(status);
+    const minutes = Number(day.working_time ?? 0);
+    const hasFullDayHours =
+      Number.isFinite(minutes) && minutes >= ATTENDANCE_RULES.MIN_FULL_DAY_MINUTES;
+    const effectiveStatus = hasFullDayHours
+      ? status === "late"
+        ? "late"
+        : "present"
+      : status;
+
+    const credit = workingDayCredit(effectiveStatus);
     workingDays += credit;
 
-    if (status === "present" || status === "present_full_day") {
+    if (effectiveStatus === "present" || effectiveStatus === "present_full_day") {
       presentDays += 1;
       fullDays += 1;
-    } else if (status === "late") {
+    } else if (effectiveStatus === "late") {
       presentDays += 1;
       fullDays += 1;
       lateMarks += 1;
-    } else if (status === "half_day") {
+    } else if (effectiveStatus === "half_day") {
       halfDays += 1;
-    } else if (status === "short_leave") {
+    } else if (effectiveStatus === "short_leave") {
       shortLeaves += 1;
       presentDays += 1;
     }
 
-    const minutes = Number(day.working_time ?? 0);
     if (Number.isFinite(minutes) && minutes > 0) {
       totalWorkingMinutes += minutes;
     }
