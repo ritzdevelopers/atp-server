@@ -120,6 +120,114 @@ async function validate_leave_type_and_employee_leave_balance(
   };
 }
 
+async function deductEmployeeLeaveBalances(
+  connection,
+  { org_id, user_id, leave_type_id, leave_days },
+) {
+  if (await isUnpaidLeaveType(connection, leave_type_id, org_id)) {
+    return { success: true, skipped: true };
+  }
+
+  const days = Number(leave_days);
+  if (!Number.isFinite(days) || days <= 0) {
+    return {
+      success: false,
+      message: "Invalid leave days for balance deduction",
+    };
+  }
+
+  const [employeeBalanceRows] = await connection.query(
+    `SELECT remaining_leaves, used_leaves
+     FROM employee_leave_balance
+     WHERE org_id = ? AND leave_type_id = ? AND user_id = ?
+     LIMIT 1`,
+    [org_id, leave_type_id, user_id],
+  );
+
+  if (employeeBalanceRows.length === 0) {
+    return { success: false, message: "Employee leave balance not found" };
+  }
+
+  const remainingLeaves = Number(employeeBalanceRows[0].remaining_leaves);
+  const usedLeaves = Number(employeeBalanceRows[0].used_leaves);
+
+  if (remainingLeaves < days) {
+    return { success: false, message: "Insufficient leave balance" };
+  }
+
+  const [updateEmployeeBalance] = await connection.query(
+    `UPDATE employee_leave_balance
+     SET remaining_leaves = ?, used_leaves = ?
+     WHERE org_id = ? AND leave_type_id = ? AND user_id = ?
+       AND remaining_leaves >= ?`,
+    [
+      remainingLeaves - days,
+      usedLeaves + days,
+      org_id,
+      leave_type_id,
+      user_id,
+      days,
+    ],
+  );
+
+  if (!updateEmployeeBalance.affectedRows) {
+    return {
+      success: false,
+      message: "Failed to deduct employee leave balance",
+    };
+  }
+
+  const year = new Date().getFullYear();
+  const month = new Date().getMonth() + 1;
+
+  const [monthlyBalanceRows] = await connection.query(
+    `SELECT used_leaves, remaining_leaves
+     FROM leave_balance
+     WHERE org_id = ? AND user_id = ? AND year = ? AND month = ?
+     LIMIT 1`,
+    [org_id, user_id, year, month],
+  );
+
+  if (monthlyBalanceRows.length === 0) {
+    return {
+      success: false,
+      message: "Monthly leave balance record not found",
+    };
+  }
+
+  const monthlyRemaining = Number(monthlyBalanceRows[0].remaining_leaves);
+  const monthlyUsed = Number(monthlyBalanceRows[0].used_leaves);
+
+  if (monthlyRemaining < days) {
+    return { success: false, message: "Insufficient monthly leave balance" };
+  }
+
+  const [updateMonthlyBalance] = await connection.query(
+    `UPDATE leave_balance
+     SET used_leaves = ?, remaining_leaves = ?, last_leave_update = CURDATE()
+     WHERE org_id = ? AND user_id = ? AND year = ? AND month = ?
+       AND remaining_leaves >= ?`,
+    [
+      monthlyUsed + days,
+      monthlyRemaining - days,
+      org_id,
+      user_id,
+      year,
+      month,
+      days,
+    ],
+  );
+
+  if (!updateMonthlyBalance.affectedRows) {
+    return {
+      success: false,
+      message: "Failed to deduct monthly leave balance",
+    };
+  }
+
+  return { success: true };
+}
+
 function validateLeaveQuery(query) {
   const {
     leave_type_id,
@@ -1532,7 +1640,7 @@ export const perform_leave_review = async (req, res) => {
     }
 
     const [leaveRows] = await connection.query(
-      `SELECT id, leave_status
+      `SELECT id, leave_status, user_id, leave_type_id, leave_days
        FROM employee_leave
        WHERE id = ? AND org_id = ?
        LIMIT 1`,
@@ -1607,6 +1715,20 @@ export const perform_leave_review = async (req, res) => {
       if (!canReview.success) {
         await connection.rollback();
         return res.status(400).json({ message: canReview.message });
+      }
+
+      if (action === "approved") {
+        const deduction = await deductEmployeeLeaveBalances(connection, {
+          org_id,
+          user_id: leave.user_id,
+          leave_type_id: leave.leave_type_id,
+          leave_days: leave.leave_days,
+        });
+
+        if (!deduction.success) {
+          await connection.rollback();
+          return res.status(400).json({ message: deduction.message });
+        }
       }
 
       await connection.query(
