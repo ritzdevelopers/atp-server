@@ -13,6 +13,7 @@ import {
   getAllRegularizationRequests,
   getRegularizationRequest,
   updateRegularizationRequest,
+  assignRegularizationToken
 } from "../../controllers/regularization/regularization.controller.js";
 
 const router = Router();
@@ -36,5 +37,6 @@ router.get("/get-my-regularization", ...auth, getMyRegularization);
 router.get("/get-all-regularization-requests", ...auth, getAllRegularizationRequests);
 router.get("/get-regularization-request/:id", ...auth, getRegularizationRequest);
 router.patch("/update-regularization-request/:id", ...auth, updateRegularizationRequest);
+router.post("/assign-regularization-token", ...auth, assignRegularizationToken);
 
 export default router;

@@ -33,6 +33,69 @@ function todayYmd() {
   return dateToLocalYmd(new Date());
 }
 
+function addMonthsToYmd(ymd, months) {
+  const parts = String(ymd).split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) return null;
+  const date = new Date(parts[0], parts[1] - 1 + months, parts[2]);
+  if (Number.isNaN(date.getTime())) return null;
+  return dateToLocalYmd(date);
+}
+
+function defaultRegularizationValidity() {
+  const valid_from = todayYmd();
+  const valid_to = addMonthsToYmd(valid_from, 1) ?? valid_from;
+  return { valid_from, valid_to };
+}
+
+function normalizeAssignBalanceEntry(item, index) {
+  if (!item || typeof item !== "object") {
+    return {
+      success: false,
+      message: `reg_data[${index}] must be an object`,
+    };
+  }
+
+  const user_id = Number(item.user_id);
+  const balance = Number(item.balance);
+
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return {
+      success: false,
+      message: `reg_data[${index}].user_id must be a valid positive integer`,
+    };
+  }
+
+  if (!Number.isInteger(balance) || balance < 0) {
+    return {
+      success: false,
+      message: `reg_data[${index}].balance must be a non-negative whole number`,
+    };
+  }
+
+  const defaults = defaultRegularizationValidity();
+  const valid_from = normalizeDateYmd(item.valid_from) ?? defaults.valid_from;
+  const valid_to = normalizeDateYmd(item.valid_to) ?? defaults.valid_to;
+
+  if (!valid_from || !valid_to) {
+    return {
+      success: false,
+      message: `reg_data[${index}] has invalid valid_from or valid_to`,
+    };
+  }
+
+  if (valid_from > valid_to) {
+    return {
+      success: false,
+      message: `reg_data[${index}].valid_from cannot be after valid_to`,
+    };
+  }
+
+  return {
+    success: true,
+    data: { user_id, balance, valid_from, valid_to },
+  };
+}
+
 function normalizeTime(value) {
   if (value == null || value === "") return null;
   const str = String(value).trim();
@@ -1460,6 +1523,131 @@ export async function updateRegularizationRequest(req, res) {
           : "Regularization request rejected successfully",
       regularization_id: regularizationId,
       result: mapRegularizationManagerRow(updatedRows[0]),
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+
+export async function assignRegularizationToken(req, res) {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const { reg_data } = req.body;
+    const { user_id: assigned_by } = req.user;
+    const org_id = req.org_id;
+
+    if (!(await isEmployeeExists(connection, assigned_by, org_id))) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "Employee not found",
+      );
+    }
+
+    if (!Array.isArray(reg_data) || reg_data.length === 0) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "reg_data must be a non-empty array",
+      );
+    }
+
+    if (reg_data.length > 500) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Cannot assign regularization tokens to more than 500 employees at once",
+      );
+    }
+
+    const seenUserIds = new Set();
+    const normalizedEntries = [];
+
+    for (let index = 0; index < reg_data.length; index += 1) {
+      const parsed = normalizeAssignBalanceEntry(reg_data[index], index);
+      if (!parsed.success) {
+        return await rollbackAndRespond(
+          connection,
+          res,
+          400,
+          parsed.message,
+        );
+      }
+
+      const { user_id } = parsed.data;
+      if (seenUserIds.has(user_id)) {
+        return await rollbackAndRespond(
+          connection,
+          res,
+          400,
+          `Duplicate user_id ${user_id} in reg_data`,
+        );
+      }
+      seenUserIds.add(user_id);
+      normalizedEntries.push(parsed.data);
+    }
+
+    const assigned = [];
+    const skipped = [];
+
+    for (const entry of normalizedEntries) {
+      const { user_id, balance, valid_from, valid_to } = entry;
+
+      if (!(await isEmployeeExists(connection, user_id, org_id))) {
+        skipped.push({
+          user_id,
+          reason: "Employee not found in this organization",
+        });
+        continue;
+      }
+
+      await connection.query(
+        `INSERT INTO regularization_balance
+          (user_id, org_id, balance, used, assigned_by, valid_from, valid_to)
+         VALUES (?, ?, ?, 0, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           balance = VALUES(balance),
+           used = 0,
+           assigned_by = VALUES(assigned_by),
+           valid_from = VALUES(valid_from),
+           valid_to = VALUES(valid_to)`,
+        [user_id, org_id, balance, assigned_by, valid_from, valid_to],
+      );
+
+      assigned.push({
+        user_id,
+        balance,
+        valid_from,
+        valid_to,
+      });
+    }
+
+    if (assigned.length === 0) {
+      await connection.rollback();
+      return res.status(400).json({
+        message: "No regularization tokens were assigned",
+        skipped,
+      });
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: `Regularization tokens assigned to ${assigned.length} employee(s)`,
+      assigned_count: assigned.length,
+      skipped_count: skipped.length,
+      assigned,
+      skipped,
     });
   } catch (error) {
     if (connection) await connection.rollback();
