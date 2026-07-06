@@ -39,6 +39,7 @@ import { isCloudDeployment } from "./services/biometric/localBiometricBridge.js"
 
 import biometricSyncAgentRoutes from "./routes/biometric/biometric.routes.js";
 import "./helper/auto_leave_assign.js";
+import "./jobs/regularization.agent.js";
 import { syncAgent } from "./jobs/sync.agent.js";
 import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 import employeeLeaveManagementRoutes from "./routes/employee.leave.management.routes.js";

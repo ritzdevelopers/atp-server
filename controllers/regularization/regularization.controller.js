@@ -47,6 +47,66 @@ function defaultRegularizationValidity() {
   return { valid_from, valid_to };
 }
 
+function currentCalendarMonthBounds() {
+  const now = new Date();
+  const start = dateToLocalYmd(new Date(now.getFullYear(), now.getMonth(), 1));
+  const end = dateToLocalYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+  return { start, end };
+}
+
+/** Month immediately after the month of `validFromYmd`. */
+function nextCalendarMonthBounds(validFromYmd) {
+  const parts = String(validFromYmd).split("-").map(Number);
+  if (parts.length !== 3 || parts.some((n) => Number.isNaN(n))) {
+    return null;
+  }
+  const [year, month] = parts;
+  const start = dateToLocalYmd(new Date(year, month, 1));
+  const end = dateToLocalYmd(new Date(year, month + 1, 0));
+  return { start, end };
+}
+
+function validateRegularizationTokenValidity(valid_from, valid_to) {
+  if (!valid_from || !valid_to) {
+    return {
+      success: false,
+      message: "valid_from and valid_to are required and must be YYYY-MM-DD",
+    };
+  }
+
+  if (valid_from > valid_to) {
+    return {
+      success: false,
+      message: "valid_from cannot be after valid_to",
+    };
+  }
+
+  const currentMonth = currentCalendarMonthBounds();
+  if (valid_from < currentMonth.start || valid_from > currentMonth.end) {
+    return {
+      success: false,
+      message: `valid_from must fall within the current month (${currentMonth.start} to ${currentMonth.end})`,
+    };
+  }
+
+  const nextMonth = nextCalendarMonthBounds(valid_from);
+  if (!nextMonth) {
+    return {
+      success: false,
+      message: "valid_from is not a valid date",
+    };
+  }
+
+  if (valid_to < nextMonth.start || valid_to > nextMonth.end) {
+    return {
+      success: false,
+      message: `valid_to must fall within the next month (${nextMonth.start} to ${nextMonth.end})`,
+    };
+  }
+
+  return { success: true, data: { valid_from, valid_to } };
+}
+
 function normalizeAssignBalanceEntry(item, index) {
   if (!item || typeof item !== "object") {
     return {
@@ -90,10 +150,79 @@ function normalizeAssignBalanceEntry(item, index) {
     };
   }
 
+  const validityCheck = validateRegularizationTokenValidity(valid_from, valid_to);
+  if (!validityCheck.success) {
+    return {
+      success: false,
+      message: `reg_data[${index}]: ${validityCheck.message}`,
+    };
+  }
+
   return {
     success: true,
     data: { user_id, balance, valid_from, valid_to },
   };
+}
+
+function normalizeUpdateBalancePayload(body) {
+  if (!body || typeof body !== "object") {
+    return { success: false, message: "reg_data must be an object" };
+  }
+
+  const user_id = Number(body.user_id);
+  if (!Number.isInteger(user_id) || user_id <= 0) {
+    return {
+      success: false,
+      message: "reg_data.user_id must be a valid positive integer",
+    };
+  }
+
+  const hasBalance =
+    body.balance !== undefined && body.balance !== null && body.balance !== "";
+  const hasValidFrom =
+    body.valid_from !== undefined && body.valid_from !== null && body.valid_from !== "";
+  const hasValidTo =
+    body.valid_to !== undefined && body.valid_to !== null && body.valid_to !== "";
+
+  if (!hasBalance && !hasValidFrom && !hasValidTo) {
+    return {
+      success: false,
+      message: "Provide at least one of balance, valid_from, or valid_to to update",
+    };
+  }
+
+  if (hasValidFrom !== hasValidTo) {
+    return {
+      success: false,
+      message: "valid_from and valid_to must both be provided when updating validity",
+    };
+  }
+
+  const patch = { user_id };
+
+  if (hasBalance) {
+    const balance = Number(body.balance);
+    if (!Number.isInteger(balance) || balance < 0) {
+      return {
+        success: false,
+        message: "balance must be a non-negative whole number",
+      };
+    }
+    patch.balance = balance;
+  }
+
+  if (hasValidFrom && hasValidTo) {
+    const valid_from = normalizeDateYmd(body.valid_from);
+    const valid_to = normalizeDateYmd(body.valid_to);
+    const validityCheck = validateRegularizationTokenValidity(valid_from, valid_to);
+    if (!validityCheck.success) {
+      return validityCheck;
+    }
+    patch.valid_from = valid_from;
+    patch.valid_to = valid_to;
+  }
+
+  return { success: true, data: patch };
 }
 
 function normalizeTime(value) {
@@ -219,15 +348,7 @@ async function rollbackAndRespond(connection, res, status, message) {
   return res.status(status).json({ message });
 }
 
-/**
- * Same-day rules:
- * - Allow check_in + check_out as separate requests on one date
- * - Reject duplicate of the same request_type
- * - Reject any new request if an existing row is request_type = both
- * - Reject request_type = both if any request already exists for that date
- * - Reject if both check_in and check_out already exist separately
- * Only pending/approved rows block; rejected rows can be re-applied.
- */
+ 
 function validateDuplicateRegularization(existingRows, newRequestType) {
   const activeRows = existingRows.filter(
     (row) => String(row.reg_status ?? "pending").toLowerCase() !== "rejected",
@@ -584,6 +705,76 @@ export async function getRegularizationBalance(req, res) {
         ? "Regularization balance fetched"
         : "No regularization balance available for this month",
       data: balanceInfo,
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+export async function getEmployeeRegularizationBalance(req, res) {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+
+    const { user_id: requester_id } = req.user;
+    const org_id = req.org_id;
+    const employee_id = Number(req.query.employee_id);
+
+    if (!(await isEmployeeExists(connection, requester_id, org_id))) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    if (!Number.isInteger(employee_id) || employee_id <= 0) {
+      return res.status(400).json({ message: "Valid employee_id is required" });
+    }
+
+    if (!(await isEmployeeExists(connection, employee_id, org_id))) {
+      return res.status(404).json({
+        message: "Target employee not found in this organization",
+      });
+    }
+
+    const [rows] = await connection.query(
+      `SELECT id, balance, used,
+        DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
+        DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_to,
+        assigned_by, created_at, updated_at
+       FROM regularization_balance
+       WHERE user_id = ? AND org_id = ?
+       LIMIT 1`,
+      [employee_id, org_id],
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        message: "Regularization balance record not found for this employee",
+      });
+    }
+
+    const row = rows[0];
+    const balance = Number(row.balance);
+    const used = Number(row.used);
+    const valid_from = normalizeDateYmd(row.valid_from);
+    const valid_to = normalizeDateYmd(row.valid_to);
+    const today = todayYmd();
+    const periodActive =
+      valid_from && valid_to && valid_from <= today && valid_to >= today;
+    const remaining = Math.max(0, balance - used);
+
+    return res.status(200).json({
+      message: "Employee regularization balance fetched",
+      data: {
+        user_id: employee_id,
+        balance,
+        used,
+        remaining,
+        valid_from,
+        valid_to,
+        assigned_by: row.assigned_by ?? null,
+        is_available: Boolean(periodActive && balance > 0 && used < balance),
+      },
     });
   } catch (error) {
     return res.status(500).json({ message: error.message });
@@ -1648,6 +1839,137 @@ export async function assignRegularizationToken(req, res) {
       skipped_count: skipped.length,
       assigned,
       skipped,
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+export async function updateRegularizationTokens(req, res) {
+  let connection;
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const { user_id: assigned_by } = req.user;
+    const org_id = req.org_id;
+    const { reg_data } = req.body;
+
+    if (!(await isEmployeeExists(connection, assigned_by, org_id))) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "Employee not found",
+      );
+    }
+
+    const parsed = normalizeUpdateBalancePayload(reg_data);
+    if (!parsed.success) {
+      return await rollbackAndRespond(connection, res, 400, parsed.message);
+    }
+
+    const { user_id, balance, valid_from, valid_to } = parsed.data;
+
+    if (!(await isEmployeeExists(connection, user_id, org_id))) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "Target employee not found in this organization",
+      );
+    }
+
+    const [existingRows] = await connection.query(
+      `SELECT id, balance, used,
+        DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
+        DATE_FORMAT(valid_to, '%Y-%m-%d') AS valid_to
+       FROM regularization_balance
+       WHERE user_id = ? AND org_id = ?
+       LIMIT 1`,
+      [user_id, org_id],
+    );
+
+    if (existingRows.length === 0) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "Regularization balance record not found for this employee",
+      );
+    }
+
+    const existing = existingRows[0];
+    const nextBalance = balance !== undefined ? balance : Number(existing.balance);
+    const nextUsed = Number(existing.used);
+
+    if (nextBalance < nextUsed) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        `balance cannot be less than already used tokens (${nextUsed})`,
+      );
+    }
+
+    const nextValidFrom =
+      valid_from !== undefined ? valid_from : normalizeDateYmd(existing.valid_from);
+    const nextValidTo =
+      valid_to !== undefined ? valid_to : normalizeDateYmd(existing.valid_to);
+
+    if (valid_from !== undefined || valid_to !== undefined) {
+      const validityCheck = validateRegularizationTokenValidity(
+        nextValidFrom,
+        nextValidTo,
+      );
+      if (!validityCheck.success) {
+        return await rollbackAndRespond(connection, res, 400, validityCheck.message);
+      }
+    }
+
+    const [updateResult] = await connection.query(
+      `UPDATE regularization_balance
+       SET balance = ?,
+           valid_from = ?,
+           valid_to = ?,
+           assigned_by = ?
+       WHERE id = ? AND user_id = ? AND org_id = ?`,
+      [
+        nextBalance,
+        nextValidFrom,
+        nextValidTo,
+        assigned_by,
+        existing.id,
+        user_id,
+        org_id,
+      ],
+    );
+
+    if (!updateResult.affectedRows) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Failed to update regularization balance",
+      );
+    }
+
+    await connection.commit();
+
+    return res.status(200).json({
+      message: "Regularization tokens updated successfully",
+      data: {
+        user_id,
+        balance: nextBalance,
+        used: nextUsed,
+        remaining: Math.max(0, nextBalance - nextUsed),
+        valid_from: nextValidFrom,
+        valid_to: nextValidTo,
+        assigned_by,
+      },
     });
   } catch (error) {
     if (connection) await connection.rollback();
