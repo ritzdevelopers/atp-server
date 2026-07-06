@@ -1,10 +1,8 @@
 import nodeCron from "node-cron";
 import { pool } from "../db/connect.js";
 
-/** Default tokens when an employee has no prior regularization_balance row. */
 const DEFAULT_MONTHLY_BALANCE = 2;
 
-/** 1st day of every month at 00:00 (server local time). */
 const CRON_EXPRESSION = "0 0 1 * *";
 
 let cronTask = null;
