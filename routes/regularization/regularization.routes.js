@@ -6,6 +6,7 @@ import {
   applyForRegularization,
   fetchReportingManager,
   getRegularizationBalance,
+  getEmployeeRegularizationBalance,
   updateRegularization,
   deleteRegularization,
   getRegularization,
@@ -13,6 +14,8 @@ import {
   getAllRegularizationRequests,
   getRegularizationRequest,
   updateRegularizationRequest,
+  assignRegularizationToken,
+  updateRegularizationTokens,
 } from "../../controllers/regularization/regularization.controller.js";
 
 const router = Router();
@@ -36,5 +39,8 @@ router.get("/get-my-regularization", ...auth, getMyRegularization);
 router.get("/get-all-regularization-requests", ...auth, getAllRegularizationRequests);
 router.get("/get-regularization-request/:id", ...auth, getRegularizationRequest);
 router.patch("/update-regularization-request/:id", ...auth, updateRegularizationRequest);
+router.get("/get-employee-regularization-balance", ...auth, getEmployeeRegularizationBalance);
+router.post("/assign-regularization-token", ...auth, assignRegularizationToken);
+router.patch("/update-regularization-token", ...auth, updateRegularizationTokens);
 
 export default router;
