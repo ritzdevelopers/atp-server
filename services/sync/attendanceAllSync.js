@@ -423,41 +423,98 @@ export async function updateAttendanceFromPunches(
   }
 }
 
-export async function fetchAttendanceAllRows({ punchDate, fromDate, toDate } = {}) {
+function normalizeEmpCodes(empCodes) {
+  if (!empCodes?.length) return [];
+  return [
+    ...new Set(
+      empCodes
+        .map((code) => String(code).trim().toUpperCase())
+        .filter(Boolean),
+    ),
+  ];
+}
+
+function filterRowsByEmpCodes(rows, empCodes) {
+  const allowed = new Set(normalizeEmpCodes(empCodes));
+  if (!allowed.size) return rows;
+
+  return rows.filter((row) => {
+    const empCode = String(row.EMP_CODE ?? row.emp_code ?? "")
+      .trim()
+      .toUpperCase();
+    return allowed.has(empCode);
+  });
+}
+
+function appendEmpCodeSqlFilter(request, empCodes) {
+  const normalized = normalizeEmpCodes(empCodes);
+  if (!normalized.length) return "";
+
+  const placeholders = normalized.map((code, index) => {
+    const param = `empCode${index}`;
+    request.input(param, code);
+    return `@${param}`;
+  });
+
+  return `AND UPPER(LTRIM(RTRIM(EMP_CODE))) IN (${placeholders.join(", ")})`;
+}
+
+export async function fetchAttendanceAllRows({
+  punchDate,
+  fromDate,
+  toDate,
+  empCodes,
+} = {}) {
   if (isLocalBridgeMode()) {
-    return fetchAttendanceAllFromLocalBridge({ punchDate, fromDate, toDate });
+    const rows = await fetchAttendanceAllFromLocalBridge({
+      punchDate,
+      fromDate,
+      toDate,
+    });
+    return filterRowsByEmpCodes(rows, empCodes);
   }
 
   const mssqlPool = await biometricDB();
 
   if (punchDate) {
-    const result = await mssqlPool.request().input("punchDate", punchDate).query(`
+    const request = mssqlPool.request().input("punchDate", punchDate);
+    const empCodeFilter = appendEmpCodeSqlFilter(request, empCodes);
+    const result = await request.query(`
       SELECT *
       FROM AttendanceAll
       WHERE CAST(PunchDate AS DATE) = @punchDate
+        ${empCodeFilter}
       ORDER BY PunchDate ASC
     `);
     return result.recordset ?? [];
   }
 
   if (fromDate && toDate) {
-    const result = await mssqlPool
+    const request = mssqlPool
       .request()
       .input("fromDate", fromDate)
-      .input("toDate", toDate)
-      .query(`
-        SELECT *
-        FROM AttendanceAll
-        WHERE CAST(PunchDate AS DATE) >= @fromDate
-          AND CAST(PunchDate AS DATE) <= @toDate
-        ORDER BY PunchDate ASC
-      `);
+      .input("toDate", toDate);
+    const empCodeFilter = appendEmpCodeSqlFilter(request, empCodes);
+    const result = await request.query(`
+      SELECT *
+      FROM AttendanceAll
+      WHERE CAST(PunchDate AS DATE) >= @fromDate
+        AND CAST(PunchDate AS DATE) <= @toDate
+        ${empCodeFilter}
+      ORDER BY PunchDate ASC
+    `);
     return result.recordset ?? [];
   }
 
-  const result = await mssqlPool.request().query(`
+  const request = mssqlPool.request();
+  const empCodeFilter = appendEmpCodeSqlFilter(request, empCodes).replace(
+    /^AND /,
+    "WHERE ",
+  );
+  const result = await request.query(`
     SELECT *
     FROM AttendanceAll
+    ${empCodeFilter}
     ORDER BY PunchDate ASC
   `);
   return result.recordset ?? [];
@@ -570,16 +627,17 @@ export async function syncTodayAttendance(org_id = DEFAULT_ORG_ID) {
 
 export async function syncAllAttendanceHistory(
   org_id = DEFAULT_ORG_ID,
-  { fromDate, toDate, connection = null } = {},
+  { fromDate, toDate, connection = null, empCodes = null } = {},
 ) {
-  const rows = await fetchAttendanceAllRows({ fromDate, toDate });
+  const rows = await fetchAttendanceAllRows({ fromDate, toDate, empCodes });
   const formatted = groupAttendanceByEmpCodeAndDate(rows);
   const stats = await syncFormattedAttendance(org_id, formatted, { connection });
 
   return {
-    mode: "full",
+    mode: empCodes?.length ? "targeted" : "full",
     from_date: fromDate ?? null,
     to_date: toDate ?? null,
+    emp_codes: normalizeEmpCodes(empCodes),
     total_essl_rows: rows.length,
     ...stats,
   };
