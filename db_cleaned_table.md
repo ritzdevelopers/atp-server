@@ -1034,7 +1034,7 @@ CREATE TABLE regularization(
 
     reason TEXT NOT NULL,
 
-    reg_status ENUM('pending','approved','rejected') DEFAULT 'pending',
+    reg_status ENUM('pending','hr_pending','approved','rejected') DEFAULT 'pending',
 
     review_comment TEXT NULL,
 
@@ -1130,4 +1130,18 @@ CREATE TABLE employee_compoff_balance(
     FOREIGN KEY(org_id) REFERENCES apt_organizations(id),
 
     UNIQUE KEY uk_user_org(user_id, org_id)
+);
+
+CREATE TABLE regularization_hr_review (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    regularization_id INT NOT NULL,
+    hr_id INT NOT NULL,
+    hr_action ENUM('pending','approved','rejected') DEFAULT 'pending',
+    review_comment TEXT,
+    reviewed_at DATETIME NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (regularization_id) REFERENCES regularization(id),
+    FOREIGN KEY (hr_id) REFERENCES apt_users(id)
 );

@@ -16,6 +16,8 @@ import {
   updateRegularizationRequest,
   assignRegularizationToken,
   updateRegularizationTokens,
+  updateRegularizationHrReview,
+  getMyRegularizationHrReviews,
 } from "../../controllers/regularization/regularization.controller.js";
 
 const router = Router();
@@ -42,5 +44,11 @@ router.patch("/update-regularization-request/:id", ...auth, updateRegularization
 router.get("/get-employee-regularization-balance", ...auth, getEmployeeRegularizationBalance);
 router.post("/assign-regularization-token", ...auth, assignRegularizationToken);
 router.patch("/update-regularization-token", ...auth, updateRegularizationTokens);
+router.get("/get-my-regularization-hr-reviews", ...auth, getMyRegularizationHrReviews);
+router.patch(
+  "/update-regularization-hr-review/:id",
+  ...auth,
+  updateRegularizationHrReview,
+);
 
 export default router;
