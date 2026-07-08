@@ -1,8 +1,11 @@
 import { pool } from "../../db/connect.js";
 import { isEmployeeExists } from "../../helper/employee_checker.js";
+import user_role_checker from "../../helper/user_role_checker.js";
 
 const VALID_REQUEST_TYPES = ["check_in", "check_out", "both"];
-const REVIEWABLE_REG_STATUSES = ["approved", "rejected"];
+const VALID_REG_STATUSES = ["pending", "hr_pending", "approved", "rejected"];
+const MANAGER_REVIEW_STATUSES = ["hr_pending", "rejected"];
+const HR_REVIEW_ACTIONS = ["approved", "rejected"];
 
 function toDbNullable(value) {
   if (value === undefined || value === null || value === "") return null;
@@ -50,7 +53,9 @@ function defaultRegularizationValidity() {
 function currentCalendarMonthBounds() {
   const now = new Date();
   const start = dateToLocalYmd(new Date(now.getFullYear(), now.getMonth(), 1));
-  const end = dateToLocalYmd(new Date(now.getFullYear(), now.getMonth() + 1, 0));
+  const end = dateToLocalYmd(
+    new Date(now.getFullYear(), now.getMonth() + 1, 0),
+  );
   return { start, end };
 }
 
@@ -150,7 +155,10 @@ function normalizeAssignBalanceEntry(item, index) {
     };
   }
 
-  const validityCheck = validateRegularizationTokenValidity(valid_from, valid_to);
+  const validityCheck = validateRegularizationTokenValidity(
+    valid_from,
+    valid_to,
+  );
   if (!validityCheck.success) {
     return {
       success: false,
@@ -180,21 +188,27 @@ function normalizeUpdateBalancePayload(body) {
   const hasBalance =
     body.balance !== undefined && body.balance !== null && body.balance !== "";
   const hasValidFrom =
-    body.valid_from !== undefined && body.valid_from !== null && body.valid_from !== "";
+    body.valid_from !== undefined &&
+    body.valid_from !== null &&
+    body.valid_from !== "";
   const hasValidTo =
-    body.valid_to !== undefined && body.valid_to !== null && body.valid_to !== "";
+    body.valid_to !== undefined &&
+    body.valid_to !== null &&
+    body.valid_to !== "";
 
   if (!hasBalance && !hasValidFrom && !hasValidTo) {
     return {
       success: false,
-      message: "Provide at least one of balance, valid_from, or valid_to to update",
+      message:
+        "Provide at least one of balance, valid_from, or valid_to to update",
     };
   }
 
   if (hasValidFrom !== hasValidTo) {
     return {
       success: false,
-      message: "valid_from and valid_to must both be provided when updating validity",
+      message:
+        "valid_from and valid_to must both be provided when updating validity",
     };
   }
 
@@ -214,7 +228,10 @@ function normalizeUpdateBalancePayload(body) {
   if (hasValidFrom && hasValidTo) {
     const valid_from = normalizeDateYmd(body.valid_from);
     const valid_to = normalizeDateYmd(body.valid_to);
-    const validityCheck = validateRegularizationTokenValidity(valid_from, valid_to);
+    const validityCheck = validateRegularizationTokenValidity(
+      valid_from,
+      valid_to,
+    );
     if (!validityCheck.success) {
       return validityCheck;
     }
@@ -322,7 +339,9 @@ function validateRegularizationInfo(info) {
           "check_in_time and check_out_time are required for both regularization",
       };
     }
-    if (parseTimeToMinutes(check_out_time) <= parseTimeToMinutes(check_in_time)) {
+    if (
+      parseTimeToMinutes(check_out_time) <= parseTimeToMinutes(check_in_time)
+    ) {
       return {
         success: false,
         message: "check_out_time must be after check_in_time",
@@ -348,7 +367,6 @@ async function rollbackAndRespond(connection, res, status, message) {
   return res.status(status).json({ message });
 }
 
- 
 function validateDuplicateRegularization(existingRows, newRequestType) {
   const activeRows = existingRows.filter(
     (row) => String(row.reg_status ?? "pending").toLowerCase() !== "rejected",
@@ -365,8 +383,7 @@ function validateDuplicateRegularization(existingRows, newRequestType) {
   if (existingTypes.includes("both")) {
     return {
       success: false,
-      message:
-        "A full-day (both) regularization already exists for this date",
+      message: "A full-day (both) regularization already exists for this date",
     };
   }
 
@@ -413,12 +430,16 @@ function validateDuplicateRegularization(existingRows, newRequestType) {
   return { success: true };
 }
 
-function validateRegularizationReview(body) {
-  const reg_status = String(body?.reg_status ?? "").trim().toLowerCase();
-  if (!REVIEWABLE_REG_STATUSES.includes(reg_status)) {
+function validateManagerRegularizationReview(body) {
+  const reg_status = String(body?.reg_status ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (!MANAGER_REVIEW_STATUSES.includes(reg_status)) {
     return {
       success: false,
-      message: "reg_status must be approved or rejected",
+      message:
+        "reg_status must be hr_pending (forward to HR) or rejected",
     };
   }
 
@@ -434,10 +455,69 @@ function validateRegularizationReview(body) {
     };
   }
 
+  let hr_id = null;
+  if (reg_status === "hr_pending") {
+    hr_id = Number(body?.hr_id);
+    if (!Number.isInteger(hr_id) || hr_id <= 0) {
+      return {
+        success: false,
+        message: "hr_id is required when forwarding a request to HR",
+      };
+    }
+  }
+
   return {
     success: true,
-    data: { reg_status, review_comment },
+    data: { reg_status, review_comment, hr_id },
   };
+}
+
+function validateHrRegularizationReview(body) {
+  const hr_action = String(body?.hr_action ?? body?.reg_status ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (!HR_REVIEW_ACTIONS.includes(hr_action)) {
+    return {
+      success: false,
+      message: "hr_action must be approved or rejected",
+    };
+  }
+
+  const review_comment =
+    body?.review_comment != null && String(body.review_comment).trim() !== ""
+      ? String(body.review_comment).trim()
+      : null;
+
+  if (hr_action === "rejected" && !review_comment) {
+    return {
+      success: false,
+      message: "review_comment is required when rejecting a request",
+    };
+  }
+
+  return {
+    success: true,
+    data: { hr_action, review_comment },
+  };
+}
+
+async function isHrOrAdmin(connection, user_id, org_id) {
+  const isHr = await user_role_checker(connection, user_id, org_id, "hr");
+  if (isHr) return true;
+  return user_role_checker(connection, user_id, org_id, "admin");
+}
+
+async function canPerformHrRegularizationReview(
+  connection,
+  actor_id,
+  org_id,
+  assigned_hr_id,
+) {
+  if (Number(actor_id) === Number(assigned_hr_id)) {
+    return true;
+  }
+  return user_role_checker(connection, actor_id, org_id, "admin");
 }
 
 function pushUniqueReportingManager(managers, seen, manager) {
@@ -609,7 +689,11 @@ export async function fetchReportingManager(req, res) {
     let source;
 
     if (teamRows.length > 0) {
-      data = await fetchTeamLeaderReportingManagers(connection, user_id, org_id);
+      data = await fetchTeamLeaderReportingManagers(
+        connection,
+        user_id,
+        org_id,
+      );
       source = "team_leaders";
     } else {
       data = await fetchHrAdminReportingManagers(connection, org_id, user_id);
@@ -631,8 +715,7 @@ export async function fetchReportingManager(req, res) {
   }
 }
 
-async function fetchActiveRegularizationBalance(connection, user_id, org_id) { 
-  
+async function fetchActiveRegularizationBalance(connection, user_id, org_id) {
   const [rows] = await connection.query(
     `SELECT id, balance, used,
       DATE_FORMAT(valid_from, '%Y-%m-%d') AS valid_from,
@@ -664,10 +747,7 @@ async function fetchActiveRegularizationBalance(connection, user_id, org_id) {
   const remaining = Math.max(0, balance - used);
 
   const periodActive =
-    valid_from &&
-    valid_to &&
-    valid_from <= today &&
-    valid_to >= today;
+    valid_from && valid_to && valid_from <= today && valid_to >= today;
   const hasQuota = balance > 0 && used < balance;
   const is_available = Boolean(periodActive && hasQuota);
 
@@ -801,7 +881,9 @@ export async function applyForRegularization(req, res) {
       );
     }
 
-    const fieldValidation = validateRegularizationInfo(req.body?.regularization_info);
+    const fieldValidation = validateRegularizationInfo(
+      req.body?.regularization_info,
+    );
     if (!fieldValidation.success) {
       return await rollbackAndRespond(
         connection,
@@ -919,7 +1001,8 @@ export async function applyForRegularization(req, res) {
     return res.status(201).json({
       message: "Regularization request submitted successfully",
       regularization_id: insertResult.insertId,
-      balance_remaining: Number(reg_balance.balance) - Number(reg_balance.used) - 1,
+      balance_remaining:
+        Number(reg_balance.balance) - Number(reg_balance.used) - 1,
     });
   } catch (error) {
     if (connection) await connection.rollback();
@@ -1092,6 +1175,122 @@ function mapRegularizationManagerRow(row) {
   };
 }
 
+const REGULARIZATION_HR_REVIEW_SELECT_SQL = `
+  SELECT
+    rhv.id AS hr_review_id,
+    rhv.regularization_id,
+    rhv.hr_id,
+    rhv.hr_action,
+    rhv.review_comment AS hr_review_comment,
+    rhv.reviewed_at AS hr_reviewed_at,
+    rhv.created_at AS hr_review_created_at,
+    rhv.updated_at AS hr_review_updated_at,
+    hr_user.user_name AS hr_reviewer_name,
+    hr_user.user_email AS hr_reviewer_email,
+    hrom.emp_code AS hr_reviewer_code,
+    r.id,
+    r.request_type,
+    r.check_in_time,
+    r.check_out_time,
+    DATE_FORMAT(r.action_date, '%Y-%m-%d') AS action_date,
+    r.user_id,
+    r.org_id,
+    r.reporting_manager,
+    rm.user_name AS reporting_manager_name,
+    rm.user_email AS reporting_manager_email,
+    rm.user_phone AS reporting_manager_phone,
+    rom.emp_code AS reporting_manager_code,
+    rmar.role_name AS reporting_manager_role_name,
+    r.reason,
+    r.reg_status,
+    r.review_comment,
+    r.approved_by,
+    ab.user_name AS approved_by_name,
+    r.approved_at,
+    r.created_at,
+    r.updated_at,
+    emp.user_name AS employee_name,
+    emp.user_email AS employee_email,
+    eom.emp_code AS employee_code,
+    eom.emp_code AS emp_code,
+    ear.role_name AS employee_role_name,
+    ot.id AS team_id,
+    ot.team_name,
+    ot.admin_id AS team_leader_id,
+    team_leader.user_name AS team_leader_name,
+    rb.balance AS regularization_balance,
+    rb.used AS regularization_used
+  FROM regularization_hr_review rhv
+  INNER JOIN regularization r
+    ON r.id = rhv.regularization_id
+  INNER JOIN apt_users hr_user
+    ON hr_user.id = rhv.hr_id
+  LEFT JOIN apt_org_members hrom
+    ON hrom.user_id = rhv.hr_id AND hrom.org_id = r.org_id AND hrom.is_active = 1
+  INNER JOIN apt_users emp
+    ON emp.id = r.user_id
+  LEFT JOIN apt_org_members eom
+    ON eom.user_id = r.user_id AND eom.org_id = r.org_id AND eom.is_active = 1
+  LEFT JOIN apt_user_roles eaur
+    ON eaur.user_id = r.user_id AND eaur.org_id = r.org_id
+  LEFT JOIN apt_roles ear
+    ON ear.id = eaur.role_id AND ear.org_id = r.org_id
+  LEFT JOIN (
+    SELECT user_id, org_id, MIN(team_id) AS team_id
+    FROM team_members
+    WHERE leave_date IS NULL
+    GROUP BY user_id, org_id
+  ) tm
+    ON tm.user_id = r.user_id AND tm.org_id = r.org_id
+  LEFT JOIN org_teams ot
+    ON ot.id = tm.team_id AND ot.org_id = r.org_id
+  LEFT JOIN apt_users team_leader
+    ON team_leader.id = ot.admin_id
+  LEFT JOIN apt_users rm
+    ON rm.id = r.reporting_manager
+  LEFT JOIN apt_org_members rom
+    ON rom.user_id = r.reporting_manager AND rom.org_id = r.org_id
+  LEFT JOIN apt_user_roles rmaur
+    ON rmaur.user_id = r.reporting_manager AND rmaur.org_id = r.org_id
+  LEFT JOIN apt_roles rmar
+    ON rmar.id = rmaur.role_id AND rmar.org_id = r.org_id
+  LEFT JOIN apt_users ab
+    ON ab.id = r.approved_by
+  LEFT JOIN regularization_balance rb
+    ON rb.user_id = r.user_id AND rb.org_id = r.org_id
+`;
+
+function mapRegularizationHrReviewRow(row) {
+  const mapped = mapRegularizationManagerRow(row);
+
+  return {
+    ...mapped,
+    hr_review_id: row.hr_review_id,
+    regularization_id: row.regularization_id,
+    hr_id: row.hr_id,
+    hr_action: row.hr_action,
+    hr_review_comment: row.hr_review_comment ?? null,
+    hr_reviewed_at: row.hr_reviewed_at ?? null,
+    hr_review_created_at: row.hr_review_created_at,
+    hr_review_updated_at: row.hr_review_updated_at,
+    hr_reviewer_name: row.hr_reviewer_name ?? null,
+    hr_reviewer_email: row.hr_reviewer_email ?? null,
+    hr_reviewer_code: row.hr_reviewer_code ?? null,
+    reporting_manager_phone: row.reporting_manager_phone ?? null,
+    reporting_manager_role_name: row.reporting_manager_role_name ?? null,
+    reporting_manager_info: row.reporting_manager
+      ? {
+          user_id: row.reporting_manager,
+          user_name: row.reporting_manager_name ?? null,
+          user_email: row.reporting_manager_email ?? null,
+          user_phone: row.reporting_manager_phone ?? null,
+          emp_code: row.reporting_manager_code ?? null,
+          role_name: row.reporting_manager_role_name ?? null,
+        }
+      : null,
+  };
+}
+
 async function restoreRegularizationBalance(connection, user_id, org_id) {
   const [balanceUpdate] = await connection.query(
     `UPDATE regularization_balance
@@ -1101,7 +1300,6 @@ async function restoreRegularizationBalance(connection, user_id, org_id) {
   );
   return balanceUpdate.affectedRows > 0;
 }
-
 
 export async function updateRegularization(req, res) {
   let connection;
@@ -1158,7 +1356,9 @@ export async function updateRegularization(req, res) {
       );
     }
 
-    const fieldValidation = validateRegularizationInfo(req.body?.regularization_info);
+    const fieldValidation = validateRegularizationInfo(
+      req.body?.regularization_info,
+    );
     if (!fieldValidation.success) {
       return await rollbackAndRespond(
         connection,
@@ -1367,7 +1567,9 @@ export async function getRegularization(req, res) {
 
     const regularizationId = parseRegularizationId(req.params.id);
     if (!regularizationId) {
-      return res.status(400).json({ message: "Valid regularization ID is required" });
+      return res
+        .status(400)
+        .json({ message: "Valid regularization ID is required" });
     }
 
     const { user_id } = req.user;
@@ -1385,7 +1587,9 @@ export async function getRegularization(req, res) {
     );
 
     if (rows.length === 0) {
-      return res.status(404).json({ message: "Regularization request not found" });
+      return res
+        .status(404)
+        .json({ message: "Regularization request not found" });
     }
 
     return res.status(200).json({
@@ -1416,9 +1620,10 @@ export async function getMyRegularization(req, res) {
 
     if (reg_status != null && String(reg_status).trim() !== "") {
       const status = String(reg_status).trim().toLowerCase();
-      if (!["pending", "approved", "rejected"].includes(status)) {
+      if (!VALID_REG_STATUSES.includes(status)) {
         return res.status(400).json({
-          message: "reg_status must be pending, approved, or rejected",
+          message:
+            "reg_status must be pending, hr_pending, approved, or rejected",
         });
       }
       filters.push("r.reg_status = ?");
@@ -1488,9 +1693,10 @@ export async function getAllRegularizationRequests(req, res) {
 
     if (reg_status != null && String(reg_status).trim() !== "") {
       const status = String(reg_status).trim().toLowerCase();
-      if (!["pending", "approved", "rejected"].includes(status)) {
+      if (!VALID_REG_STATUSES.includes(status)) {
         return res.status(400).json({
-          message: "reg_status must be pending, approved, or rejected",
+          message:
+            "reg_status must be pending, hr_pending, approved, or rejected",
         });
       }
       filters.push("r.reg_status = ?");
@@ -1557,7 +1763,9 @@ export async function getRegularizationRequest(req, res) {
 
     const regularizationId = parseRegularizationId(req.params.id);
     if (!regularizationId) {
-      return res.status(400).json({ message: "Valid regularization ID is required" });
+      return res
+        .status(400)
+        .json({ message: "Valid regularization ID is required" });
     }
 
     const { user_id } = req.user;
@@ -1590,8 +1798,73 @@ export async function getRegularizationRequest(req, res) {
   }
 }
 
+async function create_hr_regularization_review(
+  connection,
+  regularization_id,
+  hr_id,
+  org_id,
+) {
+  try {
+    if (!regularization_id || !Number.isInteger(regularization_id)) {
+      return { success: false, message: "Invalid regularization ID" };
+    }
+    if (!hr_id || !Number.isInteger(hr_id)) {
+      return { success: false, message: "Invalid HR ID" };
+    }
+
+    const [existingRows] = await connection.query(
+      `SELECT id
+       FROM regularization_hr_review
+       WHERE regularization_id = ? AND hr_id = ?
+       LIMIT 1`,
+      [regularization_id, hr_id],
+    );
+    if (existingRows.length > 0) {
+      return {
+        success: false,
+        message: "HR regularization review already exists",
+      };
+    }
+
+    if (!(await isEmployeeExists(connection, hr_id, org_id))) {
+      return {
+        success: false,
+        message: "Assigned HR reviewer not found in this organization",
+      };
+    }
+
+    if (!(await isHrOrAdmin(connection, hr_id, org_id))) {
+      return {
+        success: false,
+        message: "Assigned reviewer must be an HR or admin user",
+      };
+    }
+
+    const [createResult] = await connection.query(
+      `INSERT INTO regularization_hr_review (regularization_id, hr_id)
+       VALUES (?, ?)`,
+      [regularization_id, hr_id],
+    );
+    if (!createResult.affectedRows) {
+      return {
+        success: false,
+        message: "Failed to create HR regularization review",
+      };
+    }
+
+    return {
+      success: true,
+      message: "HR regularization review created successfully",
+      hr_review_id: createResult.insertId,
+    };
+  } catch (error) {
+    return { success: false, message: error.message };
+  }
+}
+
 export async function updateRegularizationRequest(req, res) {
   let connection;
+
   try {
     connection = await pool.promise().getConnection();
     await connection.beginTransaction();
@@ -1618,7 +1891,7 @@ export async function updateRegularizationRequest(req, res) {
       );
     }
 
-    const reviewValidation = validateRegularizationReview(req.body);
+    const reviewValidation = validateManagerRegularizationReview(req.body);
     if (!reviewValidation.success) {
       return await rollbackAndRespond(
         connection,
@@ -1628,7 +1901,22 @@ export async function updateRegularizationRequest(req, res) {
       );
     }
 
-    const { reg_status, review_comment } = reviewValidation.data;
+    const { reg_status, review_comment, hr_id } = reviewValidation.data;
+
+    if (reg_status === "hr_pending") {
+      if (!(await isEmployeeExists(connection, hr_id, org_id))) {
+        return await rollbackAndRespond(connection, res, 404, "HR not found");
+      }
+
+      if (!(await isHrOrAdmin(connection, hr_id, org_id))) {
+        return await rollbackAndRespond(
+          connection,
+          res,
+          400,
+          "Assigned reviewer must be an HR or admin user",
+        );
+      }
+    }
 
     const [existingRows] = await connection.query(
       `SELECT id, user_id, org_id, reporting_manager, reg_status
@@ -1663,7 +1951,7 @@ export async function updateRegularizationRequest(req, res) {
         connection,
         res,
         400,
-        "Only pending regularization requests can be reviewed",
+        "Only pending regularization requests can be reviewed by the reporting manager",
       );
     }
 
@@ -1671,14 +1959,7 @@ export async function updateRegularizationRequest(req, res) {
       `UPDATE regularization
        SET reg_status = ?, review_comment = ?, approved_by = ?, approved_at = NOW()
        WHERE id = ? AND org_id = ? AND reporting_manager = ? AND reg_status = 'pending'`,
-      [
-        reg_status,
-        review_comment,
-        user_id,
-        regularizationId,
-        org_id,
-        user_id,
-      ],
+      [reg_status, review_comment, user_id, regularizationId, org_id, user_id],
     );
 
     if (!updateResult.affectedRows) {
@@ -1691,11 +1972,24 @@ export async function updateRegularizationRequest(req, res) {
     }
 
     if (reg_status === "rejected") {
-      await restoreRegularizationBalance(
+      await restoreRegularizationBalance(connection, existing.user_id, org_id);
+    }
+
+    if (reg_status === "hr_pending") {
+      const hrReviewResult = await create_hr_regularization_review(
         connection,
-        existing.user_id,
+        regularizationId,
+        hr_id,
         org_id,
       );
+      if (!hrReviewResult.success) {
+        return await rollbackAndRespond(
+          connection,
+          res,
+          400,
+          hrReviewResult.message,
+        );
+      }
     }
 
     await connection.commit();
@@ -1709,10 +2003,11 @@ export async function updateRegularizationRequest(req, res) {
 
     return res.status(200).json({
       message:
-        reg_status === "approved"
-          ? "Regularization request approved successfully"
+        reg_status === "hr_pending"
+          ? "Regularization request forwarded to HR for final approval"
           : "Regularization request rejected successfully",
       regularization_id: regularizationId,
+      hr_id: reg_status === "hr_pending" ? hr_id : null,
       result: mapRegularizationManagerRow(updatedRows[0]),
     });
   } catch (error) {
@@ -1723,6 +2018,289 @@ export async function updateRegularizationRequest(req, res) {
   }
 }
 
+export async function updateRegularizationHrReview(req, res) {
+  let connection;
+
+  try {
+    connection = await pool.promise().getConnection();
+    await connection.beginTransaction();
+
+    const regularizationId = parseRegularizationId(req.params.id);
+    if (!regularizationId) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Valid regularization ID is required",
+      );
+    }
+
+    const { user_id: actor_id } = req.user;
+    const org_id = req.org_id;
+
+    if (!(await isEmployeeExists(connection, actor_id, org_id))) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "Employee not found",
+      );
+    }
+
+    const reviewValidation = validateHrRegularizationReview(req.body);
+    if (!reviewValidation.success) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        reviewValidation.message,
+      );
+    }
+
+    const { hr_action, review_comment } = reviewValidation.data;
+
+    const [reviewRows] = await connection.query(
+      `SELECT
+        rhv.id AS hr_review_id,
+        rhv.hr_id,
+        rhv.hr_action,
+        r.id AS regularization_id,
+        r.user_id,
+        r.org_id,
+        r.reg_status
+       FROM regularization_hr_review rhv
+       INNER JOIN regularization r ON r.id = rhv.regularization_id
+       WHERE rhv.regularization_id = ? AND r.org_id = ?
+       LIMIT 1`,
+      [regularizationId, org_id],
+    );
+
+    if (reviewRows.length === 0) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        404,
+        "HR regularization review not found",
+      );
+    }
+
+    const review = reviewRows[0];
+
+    if (
+      !(await canPerformHrRegularizationReview(
+        connection,
+        actor_id,
+        org_id,
+        review.hr_id,
+      ))
+    ) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        403,
+        "Only the assigned HR reviewer or an organization admin can perform this action",
+      );
+    }
+
+    if (String(review.hr_action).toLowerCase() !== "pending") {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "This HR review has already been completed",
+      );
+    }
+
+    if (String(review.reg_status).toLowerCase() !== "hr_pending") {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Only regularization requests awaiting HR approval can be reviewed",
+      );
+    }
+
+    const [hrReviewUpdate] = await connection.query(
+      `UPDATE regularization_hr_review
+       SET hr_action = ?, review_comment = ?, reviewed_at = NOW()
+       WHERE id = ? AND hr_action = 'pending'`,
+      [hr_action, review_comment, review.hr_review_id],
+    );
+
+    if (!hrReviewUpdate.affectedRows) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Failed to update HR regularization review",
+      );
+    }
+
+    const nextRegStatus = hr_action === "approved" ? "approved" : "rejected";
+
+    const [regUpdate] = await connection.query(
+      `UPDATE regularization
+       SET reg_status = ?, review_comment = ?, approved_by = ?, approved_at = NOW()
+       WHERE id = ? AND org_id = ? AND reg_status = 'hr_pending'`,
+      [nextRegStatus, review_comment, actor_id, regularizationId, org_id],
+    );
+
+    if (!regUpdate.affectedRows) {
+      return await rollbackAndRespond(
+        connection,
+        res,
+        400,
+        "Failed to update regularization request status",
+      );
+    }
+
+    if (hr_action === "rejected") {
+      await restoreRegularizationBalance(connection, review.user_id, org_id);
+    }
+
+    await connection.commit();
+
+    const [updatedRows] = await connection.query(
+      `${REGULARIZATION_HR_REVIEW_SELECT_SQL}
+       WHERE rhv.regularization_id = ? AND r.org_id = ?
+       LIMIT 1`,
+      [regularizationId, org_id],
+    );
+
+    return res.status(200).json({
+      message:
+        hr_action === "approved"
+          ? "Regularization request approved successfully"
+          : "Regularization request rejected successfully",
+      regularization_id: regularizationId,
+      hr_action,
+      result: mapRegularizationHrReviewRow(updatedRows[0]),
+    });
+  } catch (error) {
+    if (connection) await connection.rollback();
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
+
+export async function getMyRegularizationHrReviews(req, res) {
+  let connection;
+
+  try {
+    connection = await pool.promise().getConnection();
+
+    const { user_id: hr_id } = req.user;
+    const org_id = req.org_id;
+    const {
+      hr_action,
+      reg_status,
+      request_type,
+      action_date,
+      employee_id,
+      is_ascending: isAscendingQuery,
+    } = req.query;
+
+    if (!(await isEmployeeExists(connection, hr_id, org_id))) {
+      return res.status(404).json({ message: "Employee not found" });
+    }
+
+    const isHr = await user_role_checker(connection, hr_id, org_id, "hr");
+    const isAdmin = await user_role_checker(connection, hr_id, org_id, "admin");
+    if (!isHr && !isAdmin) {
+      return res.status(403).json({
+        message: "Only HR or admin users can access assigned HR reviews",
+      });
+    }
+
+    const filters = ["r.org_id = ?"];
+    const params = [org_id];
+
+    if (!isAdmin) {
+      filters.push("rhv.hr_id = ?");
+      params.push(hr_id);
+    }
+
+    if (hr_action != null && String(hr_action).trim() !== "") {
+      const action = String(hr_action).trim().toLowerCase();
+      if (!["pending", "approved", "rejected"].includes(action)) {
+        return res.status(400).json({
+          message: "hr_action must be pending, approved, or rejected",
+        });
+      }
+      filters.push("rhv.hr_action = ?");
+      params.push(action);
+    }
+
+    if (reg_status != null && String(reg_status).trim() !== "") {
+      const status = String(reg_status).trim().toLowerCase();
+      if (!VALID_REG_STATUSES.includes(status)) {
+        return res.status(400).json({
+          message:
+            "reg_status must be pending, hr_pending, approved, or rejected",
+        });
+      }
+      filters.push("r.reg_status = ?");
+      params.push(status);
+    }
+
+    if (request_type != null && String(request_type).trim() !== "") {
+      const type = String(request_type).trim().toLowerCase();
+      if (!VALID_REQUEST_TYPES.includes(type)) {
+        return res.status(400).json({
+          message: "request_type must be check_in, check_out, or both",
+        });
+      }
+      filters.push("r.request_type = ?");
+      params.push(type);
+    }
+
+    if (action_date != null && String(action_date).trim() !== "") {
+      const date = normalizeDateYmd(action_date);
+      if (!date) {
+        return res.status(400).json({
+          message: "action_date must be YYYY-MM-DD",
+        });
+      }
+      filters.push("r.action_date = ?");
+      params.push(date);
+    }
+
+    if (employee_id != null && String(employee_id).trim() !== "") {
+      const applicantId = Number(employee_id);
+      if (!Number.isInteger(applicantId) || applicantId <= 0) {
+        return res.status(400).json({
+          message: "employee_id must be a valid user id",
+        });
+      }
+      filters.push("r.user_id = ?");
+      params.push(applicantId);
+    }
+
+    const sortDirection =
+      String(isAscendingQuery).toUpperCase() === "ASC" ? "ASC" : "DESC";
+
+    const [rows] = await connection.query(
+      `${REGULARIZATION_HR_REVIEW_SELECT_SQL}
+       WHERE ${filters.join(" AND ")}
+       ORDER BY rhv.created_at ${sortDirection}`,
+      params,
+    );
+
+    return res.status(200).json({
+      message:
+        rows.length > 0
+          ? "HR regularization reviews fetched"
+          : "No HR regularization reviews found",
+      count: rows.length,
+      result: rows.map(mapRegularizationHrReviewRow),
+    });
+  } catch (error) {
+    return res.status(500).json({ message: error.message });
+  } finally {
+    if (connection) connection.release();
+  }
+}
 
 export async function assignRegularizationToken(req, res) {
   let connection;
@@ -1767,12 +2345,7 @@ export async function assignRegularizationToken(req, res) {
     for (let index = 0; index < reg_data.length; index += 1) {
       const parsed = normalizeAssignBalanceEntry(reg_data[index], index);
       if (!parsed.success) {
-        return await rollbackAndRespond(
-          connection,
-          res,
-          400,
-          parsed.message,
-        );
+        return await rollbackAndRespond(connection, res, 400, parsed.message);
       }
 
       const { user_id } = parsed.data;
@@ -1903,7 +2476,8 @@ export async function updateRegularizationTokens(req, res) {
     }
 
     const existing = existingRows[0];
-    const nextBalance = balance !== undefined ? balance : Number(existing.balance);
+    const nextBalance =
+      balance !== undefined ? balance : Number(existing.balance);
     const nextUsed = Number(existing.used);
 
     if (nextBalance < nextUsed) {
@@ -1916,7 +2490,9 @@ export async function updateRegularizationTokens(req, res) {
     }
 
     const nextValidFrom =
-      valid_from !== undefined ? valid_from : normalizeDateYmd(existing.valid_from);
+      valid_from !== undefined
+        ? valid_from
+        : normalizeDateYmd(existing.valid_from);
     const nextValidTo =
       valid_to !== undefined ? valid_to : normalizeDateYmd(existing.valid_to);
 
@@ -1926,7 +2502,12 @@ export async function updateRegularizationTokens(req, res) {
         nextValidTo,
       );
       if (!validityCheck.success) {
-        return await rollbackAndRespond(connection, res, 400, validityCheck.message);
+        return await rollbackAndRespond(
+          connection,
+          res,
+          400,
+          validityCheck.message,
+        );
       }
     }
 
