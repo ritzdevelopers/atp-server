@@ -45,6 +45,7 @@ import syncEslRoutes from "./routes/sync/sync.attendance.routes.js";
 import employeeLeaveManagementRoutes from "./routes/employee.leave.management.routes.js";
 import regularizationRoutes from "./routes/regularization/regularization.routes.js";
 import compOffManagementRoutes from "./routes/comp-off-management/comp-off-management.routes.js";
+import "./jobs/auto_backup.agent.js";
 dotenv.config();
 
 const app = express();
