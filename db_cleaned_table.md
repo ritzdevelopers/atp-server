@@ -1145,3 +1145,22 @@ CREATE TABLE regularization_hr_review (
     FOREIGN KEY (regularization_id) REFERENCES regularization(id),
     FOREIGN KEY (hr_id) REFERENCES apt_users(id)
 );
+
+
+
+CREATE TABLE attendance_all_backup (
+	ID int auto_increment primary key,
+    EMP_CODE varchar(50),
+    PunchDate datetime,
+    UpdateFlag VARCHAR(50),
+    MachinID VARCHAR(50),
+    UpdatedOn datetime,
+    
+    created_at timestamp default current_timestamp
+);
+
+CREATE TABLE backup_logs (
+	id int primary key auto_increment,
+    last_backup_date datetime not null,
+    latest_backup timestamp default current_timestamp
+);

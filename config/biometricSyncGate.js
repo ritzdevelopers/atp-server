@@ -1,9 +1,3 @@
-/**
- * Central switch for in-app biometric / eSSL SQL Server sync.
- * On Render (cloud), use BIOMETRIC_LOCAL_BRIDGE_URL to pull from the office PC
- * when attendance-sync-agent is running. Direct LAN SQL is not reachable.
- */
-
 import { isLocalBridgeMode, isLocalBridgeOnline } from "../services/biometric/localBiometricBridge.js";
 
 function isPrivateOrLocalHost(host) {
